@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>JSON Driven Ammo.js + Three.js Softbody Demo</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            color: #61443e;
+            font-family: Monospace;
+            font-size: 13px;
+            text-align: center;
+            background-color: #bfd1e5;
+            margin: 0px;
+            overflow: hidden;
+        }
+        #info { position: absolute; top: 0px; width: 100%; padding: 5px; }
+        #container { width: 100vw; height: 100vh; }
+    </style>
+</head>
+<body>
+    <div id="info">
+        X3D JSON Driven Ammo.js + Three.js Soft Body Physics Demo<br>
+        Press <b>Q</b> or <b>A</b> to swing the arm into the brick wall!<br>
+        Watch the soft body bouncy ball drop from above.
+    </div>
+    <div id="container"></div>
+
+    <!-- 1. Pure JS (asm.js) version of Ammo.js. No .wasm files required! -->
+    <script src="https://cdn.jsdelivr.net/gh/kripken/ammo.js@main/builds/ammo.js"></script>
+
+    <!-- 2. Three.js and OrbitControls -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+    <!-- 3. Engine / Parser Script -->
+    <script src="index.js"></script>
+</body>
+</html>
