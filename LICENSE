@@ -6,4 +6,6 @@ Original code:
 
 https://github.com/kripken/ammo.js/blob/main/examples/webgl_demo_softbody_cloth/index.html
 
+The above code has been altered to accept X3D JSON.
+
 Most of my addition was to make it so it could load X3D rigid bodies, and then propose a couple of soft bodies for X3D.
