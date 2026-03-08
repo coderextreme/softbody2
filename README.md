@@ -10,7 +10,7 @@ Install node.js from https://nodejs.org
 
 ## Launch Vite
 
-```npm run dev``
+```npm run dev```
 
 ## Visit site listed in terminal (CTRL-left click) in your web browser
 
