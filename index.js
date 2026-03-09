@@ -720,7 +720,8 @@ function createSoftBodySphere(sbConfig, shapeNode, colorArray) {
     const sphere = shapeNode?.["-geometry"]?.Sphere;
     const radius = sphere?.["@radius"] || 1.0;
 
-    const geometry = new THREE.IcosahedronBufferGeometry(radius, 3);
+    // const geometry = new THREE.IcosahedronBufferGeometry(radius, 3);
+    const geometry = new THREE.SphereGeometry(radius, 32, 16);
     geometry.translate(pos[0], pos[1], pos[2]);
 
     const material = new THREE.MeshLambertMaterial({ color: new THREE.Color(...colorArray) });
