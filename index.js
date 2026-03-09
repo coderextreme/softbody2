@@ -83,7 +83,24 @@ function initPhysics() {
 }
 
 function parseSceneJSON(sceneData) {
-    const collection = sceneData.RigidBodyCollection;
+    let collection = null;
+
+    // Extract RigidBodyCollection from the -children array if it exists
+    if (sceneData["-children"]) {
+        const targetChild = sceneData["-children"].find(child => child.RigidBodyCollection);
+        if (targetChild) {
+            collection = targetChild.RigidBodyCollection;
+        }
+    } else if (sceneData.RigidBodyCollection) {
+        // Fallback for previous structure
+        collection = sceneData.RigidBodyCollection;
+    }
+
+    if (!collection) {
+        console.error("No RigidBodyCollection found in Scene -children.");
+        return;
+    }
+
     const gravity = collection["@gravity"];
     physicsWorld.setGravity(new Ammo.btVector3(gravity[0], gravity[1], gravity[2]));
     physicsWorld.getWorldInfo().set_m_gravity(new Ammo.btVector3(gravity[0], gravity[1], gravity[2]));
@@ -96,7 +113,7 @@ function parseSceneJSON(sceneData) {
             const pos = rb["@position"];
             const def = rb["@DEF"];
 
-            // Parse through the newly nested schema using optional chaining
+            // Parse through the nested schema using optional chaining
             const shapeNode = rb["-geometry"]?.CollidableShape?.["-shape"]?.Shape;
             const size = shapeNode?.["-geometry"]?.Box?.["@size"] || [1, 1, 1];
             const col = shapeNode?.["-appearance"]?.Appearance?.["-material"]?.Material?.["@diffuseColor"] || [Math.random(), Math.random(), Math.random()];
