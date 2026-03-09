@@ -122,13 +122,20 @@ function parseSceneJSON(sceneData) {
         });
     }
 
-    // 2. Parse Soft Bodies (Custom JSON extensions)
+    // 2. Parse Soft Bodies
     if (collection["-softBodies"]) {
         collection["-softBodies"].forEach(sbNode => {
-            if (sbNode.SoftBodyCloth) {
-                createSoftBodyCloth(sbNode.SoftBodyCloth);
-            } else if (sbNode.SoftBodySphere) {
-                createSoftBodySphere(sbNode.SoftBodySphere);
+            const sb = sbNode.SoftBody;
+            if (sb) {
+                const type = sb["@type"];
+                const shapeNode = sb["-geometry"]?.CollidableShape?.["-shape"]?.Shape;
+                const col = shapeNode?.["-appearance"]?.Appearance?.["-material"]?.Material?.["@diffuseColor"] || [0.8, 0.8, 0.8];
+
+                if (type === "Cloth") {
+                    createSoftBodyCloth(sb, col);
+                } else if (type === "Sphere") {
+                    createSoftBodySphere(sb, col);
+                }
             }
         });
     }
@@ -174,14 +181,13 @@ function createRigidBody(def, size, mass, pos, colorArray) {
     if (def) parsedBodiesMap[def] = { mesh, body };
 }
 
-function createSoftBodyCloth(sbConfig) {
+function createSoftBodyCloth(sbConfig, colorArray) {
     const pos = sbConfig["@position"];
     const width = sbConfig["@width"];
     const height = sbConfig["@height"];
     const segZ = sbConfig["@segmentsZ"];
     const segY = sbConfig["@segmentsY"];
     const mass = sbConfig["@mass"];
-    const colorArray = sbConfig["@color"];
 
     // BufferGeometry to represent cloth
     const geometry = new THREE.PlaneBufferGeometry(width, height, segZ, segY);
@@ -228,11 +234,10 @@ function createSoftBodyCloth(sbConfig) {
     softBodies.push(clothMesh);
 }
 
-function createSoftBodySphere(sbConfig) {
+function createSoftBodySphere(sbConfig, colorArray) {
     const pos = sbConfig["@position"];
     const radius = sbConfig["@radius"];
     const mass = sbConfig["@mass"];
-    const colorArray = sbConfig["@color"];
 
     // Icosahedron detail=3 for smooth surface matching
     const geometry = new THREE.IcosahedronBufferGeometry(radius, 3);
