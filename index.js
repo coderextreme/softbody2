@@ -127,13 +127,14 @@ function parseSceneJSON(sceneData) {
         collection["-softBodies"].forEach(sbNode => {
             const sb = sbNode.SoftBody;
             if (sb) {
-                const type = sb["@type"];
                 const shapeNode = sb["-geometry"]?.CollidableShape?.["-shape"]?.Shape;
+                const geometryNode = shapeNode?.["-geometry"];
                 const col = shapeNode?.["-appearance"]?.Appearance?.["-material"]?.Material?.["@diffuseColor"] || [0.8, 0.8, 0.8];
 
-                if (type === "Cloth") {
+                // Determine type based on inner geometry node
+                if (geometryNode?.ElevationGrid) {
                     createSoftBodyCloth(sb, col);
-                } else if (type === "Sphere") {
+                } else if (geometryNode?.Sphere) {
                     createSoftBodySphere(sb, col);
                 }
             }

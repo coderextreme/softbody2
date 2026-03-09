@@ -110,7 +110,6 @@
               {
                 "SoftBody": {
                   "@DEF": "Cloth",
-                  "@type": "Cloth",
                   "@mass": 1.5,
                   "@position": [-3, 1.0, 2.0],
                   "-geometry": {
@@ -151,7 +150,6 @@
               {
                 "SoftBody": {
                   "@DEF": "SquishyBall",
-                  "@type": "Sphere",
                   "@mass": 2.5,
                   "@position": [0, 15, 1.5],
                   "-geometry": {
