@@ -105,13 +105,13 @@
               "@segmentsZ": 35,
               "@segmentsY": 25,
               "@color": [0.9, 0.9, 0.9],
-              "-anchors": [
-                { "SoftBodyAnchor": { "@nodeIndex": 0, "@rigidBody": "Arm", "@influence": 1.0 } },
-                { "SoftBodyAnchor": { "@nodeIndex": 7, "@rigidBody": "Arm", "@influence": 1.0 } },
-                { "SoftBodyAnchor": { "@nodeIndex": 14, "@rigidBody": "Arm", "@influence": 1.0 } },
-                { "SoftBodyAnchor": { "@nodeIndex": 21, "@rigidBody": "Arm", "@influence": 1.0 } },
-                { "SoftBodyAnchor": { "@nodeIndex": 28, "@rigidBody": "Arm", "@influence": 1.0 } },
-                { "SoftBodyAnchor": { "@nodeIndex": 35, "@rigidBody": "Arm", "@influence": 1.0 } }
+              "-stitches": [
+                { "Stitch": { "@index": 0, "@rigidBody": "Arm", "@weight": 1.0 } },
+                { "Stitch": { "@index": 7, "@rigidBody": "Arm", "@weight": 1.0 } },
+                { "Stitch": { "@index": 14, "@rigidBody": "Arm", "@weight": 1.0 } },
+                { "Stitch": { "@index": 21, "@rigidBody": "Arm", "@weight": 1.0 } },
+                { "Stitch": { "@index": 28, "@rigidBody": "Arm", "@weight": 1.0 } },
+                { "Stitch": { "@index": 35, "@rigidBody": "Arm", "@weight": 1.0 } }
               ]
             }
           },
