@@ -95,9 +95,11 @@ function parseSceneJSON(sceneData) {
             const mass = rb["@mass"];
             const pos = rb["@position"];
             const def = rb["@DEF"];
-            const geom = rb["-geometry"].Box;
-            const size = geom["@size"];
-            const col = geom["@color"] || [Math.random(), Math.random(), Math.random()];
+
+            // Parse through the newly nested schema using optional chaining
+            const shapeNode = rb["-geometry"]?.CollidableShape?.["-shape"]?.Shape;
+            const size = shapeNode?.["-geometry"]?.Box?.["@size"] || [1, 1, 1];
+            const col = shapeNode?.["-appearance"]?.Appearance?.["-material"]?.Material?.["@diffuseColor"] || [Math.random(), Math.random(), Math.random()];
 
             createRigidBody(def, size, mass, pos, col);
         });
