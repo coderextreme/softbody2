@@ -45,11 +45,10 @@ function initGraphics() {
     const container = document.getElementById('container');
     container.innerHTML = ""; // Clear loading messages
 
+    // Provide default camera; will be updated by Viewpoint in X3D
     camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.2, 2000);
-    camera.position.set(-14, 12, 12);
 
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xbfd1e5);
 
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio);
@@ -58,16 +57,6 @@ function initGraphics() {
     container.appendChild(renderer.domElement);
 
     controls = new THREE.OrbitControls(camera, renderer.domElement);
-    controls.target.set(0, 3, 0);
-
-    scene.add(new THREE.AmbientLight(0x404040));
-    const light = new THREE.DirectionalLight(0xffffff, 1);
-    light.position.set(-7, 15, 15);
-    light.castShadow = true;
-    const d = 15;
-    light.shadow.camera.left = -d; light.shadow.camera.right = d;
-    light.shadow.camera.top = d; light.shadow.camera.bottom = -d;
-    scene.add(light);
 
     window.addEventListener('resize', onWindowResize, false);
 }
@@ -83,21 +72,109 @@ function initPhysics() {
 }
 
 function parseSceneJSON(sceneData) {
-    let collection = null;
+    const children = sceneData["-children"];
 
-    // Extract RigidBodyCollection from the -children array if it exists
-    if (sceneData["-children"]) {
-        const targetChild = sceneData["-children"].find(child => child.RigidBodyCollection);
-        if (targetChild) {
-            collection = targetChild.RigidBodyCollection;
-        }
+    if (children) {
+        children.forEach(child => {
+            if (child.Background) parseBackground(child.Background);
+            if (child.Viewpoint) parseViewpoint(child.Viewpoint);
+            if (child.EnvironmentLight) parseEnvironmentLight(child.EnvironmentLight);
+            if (child.DirectionalLight) parseDirectionalLight(child.DirectionalLight);
+            if (child.PointLight) parsePointLight(child.PointLight);
+            if (child.SpotLight) parseSpotLight(child.SpotLight);
+            if (child.RigidBodyCollection) parseRigidBodyCollection(child.RigidBodyCollection);
+        });
     } else if (sceneData.RigidBodyCollection) {
         // Fallback for previous structure
-        collection = sceneData.RigidBodyCollection;
+        parseRigidBodyCollection(sceneData.RigidBodyCollection);
     }
+}
 
+function parseBackground(bgData) {
+    const color = bgData["@skyColor"] || [0, 0, 0];
+    scene.background = new THREE.Color(color[0], color[1], color[2]);
+}
+
+function parseViewpoint(vpData) {
+    if (vpData["@position"]) {
+        const pos = vpData["@position"];
+        camera.position.set(pos[0], pos[1], pos[2]);
+    }
+    if (vpData["@fieldOfView"]) {
+        // Convert radians to degrees
+        camera.fov = vpData["@fieldOfView"] * (180 / Math.PI);
+        camera.updateProjectionMatrix();
+    }
+    if (vpData["@centerOfRotation"]) {
+        const cor = vpData["@centerOfRotation"];
+        controls.target.set(cor[0], cor[1], cor[2]);
+        controls.update();
+    }
+}
+
+function parseEnvironmentLight(elData) {
+    const color = elData["@color"] || [1, 1, 1];
+    const intensity = elData["@ambientIntensity"] !== undefined ? elData["@ambientIntensity"] : 1.0;
+    const ambientLight = new THREE.AmbientLight(new THREE.Color(color[0], color[1], color[2]), intensity);
+    scene.add(ambientLight);
+}
+
+function parseDirectionalLight(dlData) {
+    const color = dlData["@color"] || [1, 1, 1];
+    const intensity = dlData["@intensity"] !== undefined ? dlData["@intensity"] : 1.0;
+    const dir = dlData["@direction"] || [0, 0, -1];
+
+    const light = new THREE.DirectionalLight(new THREE.Color(color[0], color[1], color[2]), intensity);
+
+    // In Three.js, directional lights cast towards target (default origin).
+    // We scale position back along the negative vector to match X3D direction.
+    const dist = 15;
+    light.position.set(-dir[0] * dist, -dir[1] * dist, -dir[2] * dist);
+
+    // Shadow mapping defaults for this scene scale
+    light.castShadow = true;
+    light.shadow.camera.left = -dist; light.shadow.camera.right = dist;
+    light.shadow.camera.top = dist; light.shadow.camera.bottom = -dist;
+
+    scene.add(light);
+}
+
+function parsePointLight(plData) {
+    const color = plData["@color"] || [1, 1, 1];
+    const intensity = plData["@intensity"] !== undefined ? plData["@intensity"] : 1.0;
+    const loc = plData["@location"] || [0, 0, 0];
+    const radius = plData["@radius"] || 100;
+
+    const light = new THREE.PointLight(new THREE.Color(color[0], color[1], color[2]), intensity, radius);
+    light.position.set(loc[0], loc[1], loc[2]);
+    light.castShadow = true;
+    scene.add(light);
+}
+
+function parseSpotLight(slData) {
+    const color = slData["@color"] || [1, 1, 1];
+    const intensity = slData["@intensity"] !== undefined ? slData["@intensity"] : 1.0;
+    const loc = slData["@location"] || [0, 0, 0];
+    const dir = slData["@direction"] || [0, 0, -1];
+    const cutOffAngle = slData["@cutOffAngle"] || (Math.PI / 4);
+    const radius = slData["@radius"] || 100;
+
+    const light = new THREE.SpotLight(new THREE.Color(color[0], color[1], color[2]), intensity, radius, cutOffAngle);
+    light.position.set(loc[0], loc[1], loc[2]);
+
+    // Spotlights in ThreeJS require a target Object3D
+    const target = new THREE.Object3D();
+    target.position.set(loc[0] + dir[0], loc[1] + dir[1], loc[2] + dir[2]);
+    scene.add(target);
+    light.target = target;
+
+    light.castShadow = true;
+    scene.add(light);
+}
+
+function parseRigidBodyCollection(collection) {
     if (!collection) {
-        console.error("No RigidBodyCollection found in Scene -children.");
+        console.error("No RigidBodyCollection found.");
         return;
     }
 
@@ -105,7 +182,7 @@ function parseSceneJSON(sceneData) {
     physicsWorld.setGravity(new Ammo.btVector3(gravity[0], gravity[1], gravity[2]));
     physicsWorld.getWorldInfo().set_m_gravity(new Ammo.btVector3(gravity[0], gravity[1], gravity[2]));
 
-    // 1. Parse Bodies (RigidBody and SoftBody are both stored in -bodies)
+    // 1. Parse Bodies
     if (collection["-bodies"]) {
         collection["-bodies"].forEach(bodyNode => {
             if (bodyNode.RigidBody) {
@@ -114,7 +191,6 @@ function parseSceneJSON(sceneData) {
                 const pos = rb["@position"];
                 const def = rb["@DEF"];
 
-                // Extract from MFNode array structure
                 const geomField = rb["-geometry"];
                 const collidableShapeNode = Array.isArray(geomField) ? geomField[0] : geomField;
                 const shapeNode = collidableShapeNode?.CollidableShape?.["-shape"]?.Shape;
@@ -127,7 +203,6 @@ function parseSceneJSON(sceneData) {
             } else if (bodyNode.SoftBody) {
                 const sb = bodyNode.SoftBody;
 
-                // Extract from MFNode array structure
                 const geomField = sb["-geometry"];
                 const collidableShapeNode = Array.isArray(geomField) ? geomField[0] : geomField;
                 const shapeNode = collidableShapeNode?.CollidableShape?.["-shape"]?.Shape;
@@ -135,7 +210,6 @@ function parseSceneJSON(sceneData) {
                 const geometryNode = shapeNode?.["-geometry"];
                 const col = shapeNode?.["-appearance"]?.Appearance?.["-material"]?.Material?.["@diffuseColor"] || [0.8, 0.8, 0.8];
 
-                // Determine type based on inner geometry node
                 if (geometryNode?.ElevationGrid) {
                     createSoftBodyCloth(sb, shapeNode, col);
                 } else if (geometryNode?.Sphere) {
@@ -145,7 +219,7 @@ function parseSceneJSON(sceneData) {
         });
     }
 
-    // 2. Parse Joints (SingleAxisHingeJoint and Stitch are both stored in -joints)
+    // 2. Parse Joints
     if (collection["-joints"]) {
         collection["-joints"].forEach(jointNode => {
             if (jointNode.SingleAxisHingeJoint) {
@@ -193,20 +267,17 @@ function createSoftBodyCloth(sbConfig, shapeNode, colorArray) {
     const pos = sbConfig["@position"];
     const mass = sbConfig["@mass"];
 
-    // Fetch geometry details dynamically from X3D ElevationGrid
     const grid = shapeNode?.["-geometry"]?.ElevationGrid;
     const xDim = grid?.["@xDimension"] || 36;
     const zDim = grid?.["@zDimension"] || 26;
     const xSpacing = grid?.["@xSpacing"] || 0.2;
     const zSpacing = grid?.["@zSpacing"] || 0.2;
 
-    // Convert ElevationGrid definitions back to width, height, and segments expected by Three/Ammo
     const segZ = xDim - 1;
     const segY = zDim - 1;
     const width = segZ * xSpacing;
     const height = segY * zSpacing;
 
-    // BufferGeometry to represent cloth
     const geometry = new THREE.PlaneBufferGeometry(width, height, segZ, segY);
     geometry.rotateY(Math.PI * 0.5);
     geometry.translate(pos[0], pos[1] + height * 0.5, pos[2] - width * 0.5);
@@ -214,13 +285,10 @@ function createSoftBodyCloth(sbConfig, shapeNode, colorArray) {
     const material = new THREE.MeshLambertMaterial({ color: new THREE.Color(...colorArray), side: THREE.DoubleSide });
     const clothMesh = new THREE.Mesh(geometry, material);
     clothMesh.castShadow = true; clothMesh.receiveShadow = true;
-
-    // Disable frustum culling so the dynamically moving vertices don't disappear when the original bounding box is off screen
     clothMesh.frustumCulled = false;
 
     scene.add(clothMesh);
 
-    // Ammo SoftBody
     const softBodyHelpers = new Ammo.btSoftBodyHelpers();
     const corner00 = new Ammo.btVector3(pos[0], pos[1] + height, pos[2]);
     const corner01 = new Ammo.btVector3(pos[0], pos[1] + height, pos[2] - width);
@@ -249,19 +317,15 @@ function createSoftBodySphere(sbConfig, shapeNode, colorArray) {
     const pos = sbConfig["@position"];
     const mass = sbConfig["@mass"];
 
-    // Fetch properties dynamically from X3D Sphere Geometry
     const sphere = shapeNode?.["-geometry"]?.Sphere;
     const radius = sphere?.["@radius"] || 1.0;
 
-    // Icosahedron detail=3 for smooth surface matching
     const geometry = new THREE.IcosahedronBufferGeometry(radius, 3);
     geometry.translate(pos[0], pos[1], pos[2]);
 
     const material = new THREE.MeshLambertMaterial({ color: new THREE.Color(...colorArray) });
     const mesh = new THREE.Mesh(geometry, material);
     mesh.castShadow = true; mesh.receiveShadow = true;
-
-    // Disable frustum culling so the ball remains visible entirely as it drops
     mesh.frustumCulled = false;
 
     scene.add(mesh);
@@ -270,37 +334,30 @@ function createSoftBodySphere(sbConfig, shapeNode, colorArray) {
     const center = new Ammo.btVector3(pos[0], pos[1], pos[2]);
     const radiusVec = new Ammo.btVector3(radius, radius, radius);
 
-    // Create soft body ellipsoid (res = 256 nodes)
     const softBody = softBodyHelpers.CreateEllipsoid(physicsWorld.getWorldInfo(), center, radiusVec, 256);
 
     const sbCfg = softBody.get_m_cfg();
     sbCfg.set_viterations(10);
     sbCfg.set_piterations(10);
-    sbCfg.set_kDF(0.1);  // Dynamic friction
-    sbCfg.set_kDP(0.01); // Damping
-
-    // Drastically lower internal pressure so it squishes rather than staying rigid
+    sbCfg.set_kDF(0.1);
+    sbCfg.set_kDP(0.01);
     sbCfg.set_kPR(10);
 
     const sbMat = softBody.get_m_materials().at(0);
-    // Lower stiffness parameters across the board to let the geometry deform
-    sbMat.set_m_kLST(0.15); // Linear stiffness
-    sbMat.set_m_kAST(0.1);  // Angular stiffness
-    sbMat.set_m_kVST(0.1);  // Volume stiffness
+    sbMat.set_m_kLST(0.15);
+    sbMat.set_m_kAST(0.1);
+    sbMat.set_m_kVST(0.1);
 
     softBody.setTotalMass(mass, false);
     Ammo.castObject(softBody, Ammo.btCollisionObject).getCollisionShape().setMargin(margin);
 
-    // Generate bending constraints to help it return to shape slowly
     softBody.generateBendingConstraints(2, sbMat);
-
     physicsWorld.addSoftBody(softBody, 1, -1);
 
     mesh.userData.physicsBody = softBody;
     mesh.userData.isSphere = true;
     softBody.setActivationState(4);
 
-    // Map Three.js geometry vertices to the closest Ammo.js SoftBody node
     const nodes = softBody.get_m_nodes();
     const numNodes = nodes.size();
     const mapping = [];
@@ -335,7 +392,6 @@ function createSoftBodySphere(sbConfig, shapeNode, colorArray) {
 }
 
 function createHinge(jointConfig) {
-    // Extract the body names from the nested SFNode structures
     const b1Name = jointConfig["-body1"]?.RigidBody?.["@USE"] || jointConfig["@body1"];
     const b2Name = jointConfig["-body2"]?.RigidBody?.["@USE"] || jointConfig["@body2"];
 
@@ -358,7 +414,6 @@ function createHinge(jointConfig) {
 }
 
 function createStitch(stitchConfig) {
-    // Extract rigid body and soft body names from nested SFNode structures
     const rbName = stitchConfig["-body1"]?.RigidBody?.["@USE"] || stitchConfig["@body1"];
     const sbName = stitchConfig["-body2"]?.SoftBody?.["@USE"] || stitchConfig["@body2"];
 
@@ -370,7 +425,6 @@ function createStitch(stitchConfig) {
         return;
     }
 
-    // Parse space-separated index and weight lists
     const indices = (stitchConfig["@body1Index"] || []).map(Number);
     const weights = (stitchConfig["@weight"] || []).map(Number);
 
@@ -380,7 +434,6 @@ function createStitch(stitchConfig) {
         softBody.appendAnchor(nodeIndex, rbEntry.body, false, weight);
     });
 }
-
 
 function initInput() {
     window.addEventListener('keydown', (e) => {
@@ -411,7 +464,6 @@ function animate() {
         const nodes = softBody.get_m_nodes();
 
         if (mesh.userData.isSphere) {
-            // Volume Mapping logic
             const mapping = mesh.userData.mapping;
             for (let i = 0; i < mapping.length; i++) {
                 const nodePos = nodes.at(mapping[i]).get_m_x();
@@ -420,7 +472,6 @@ function animate() {
                 positions[i * 3 + 2] = nodePos.z();
             }
         } else {
-            // Cloth logic
             const numVerts = positions.length / 3;
             let idx = 0;
             for (let i = 0; i < numVerts; i++) {

@@ -54,6 +54,31 @@
     "Scene": {
       "-children": [
         {
+          "Background": {
+            "@skyColor": [0.749, 0.820, 0.898]
+          }
+        },
+        {
+          "Viewpoint": {
+            "@position": [-14, 12, 12],
+            "@fieldOfView": 1.0472,
+            "@centerOfRotation": [0, 3, 0]
+          }
+        },
+        {
+          "EnvironmentLight": {
+            "@color": [0.251, 0.251, 0.251],
+            "@ambientIntensity": 1.0
+          }
+        },
+        {
+          "DirectionalLight": {
+            "@color": [1, 1, 1],
+            "@intensity": 1.0,
+            "@direction": [0.4667, -1, -1]
+          }
+        },
+        {
           "RigidBodyCollection": {
             "@gravity": [0, -9.8, 0],
             "-bodies": [
@@ -193,8 +218,8 @@
               {
                 "Stitch": {
                   "@DEF": "ArmClothStitch",
-		  "@body1Index": [0, 7, 14, 21, 28, 35],
-		  "@weight": [1, 1, 1, 1, 1, 1],
+                  "@body1Index": [0, 7, 14, 21, 28, 35],
+                  "@weight": [1, 1, 1, 1, 1, 1],
                   "-body1": {
                     "RigidBody": {
                       "@USE": "Arm"
