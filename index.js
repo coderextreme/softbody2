@@ -90,6 +90,28 @@ function parseSceneJSON(sceneData) {
     }
 }
 
+function extractShapeNodes(geomArray) {
+    if (!geomArray) return [];
+
+    const shapes = [];
+
+    const arr = Array.isArray(geomArray) ? geomArray : [geomArray];
+
+    arr.forEach(entry => {
+        const cs = entry.CollidableShape;
+        if (!cs) return;
+
+        const csList = Array.isArray(cs) ? cs : [cs];
+
+        csList.forEach(c => {
+            const shape = c["-shape"]?.Shape;
+            if (shape) shapes.push(shape);
+        });
+    });
+
+    return shapes;
+}
+
 function parseBackground(bgData) {
     const color = bgData["@skyColor"] || [0, 0, 0];
     scene.background = new THREE.Color(color[0], color[1], color[2]);
@@ -172,6 +194,167 @@ function parseSpotLight(slData) {
     scene.add(light);
 }
 
+function parseX3DGeometry(geomNode) {
+    if (!geomNode) {
+	    console.warn("No geomNode!");
+	    return null;
+    }
+
+    // 3D primitives
+    if (geomNode.Box) {
+        const s = geomNode.Box["@size"] || [1,1,1];
+        return new THREE.BoxGeometry(s[0], s[1], s[2]);
+    }
+    if (geomNode.Sphere) {
+        const r = geomNode.Sphere["@radius"] || 1;
+        return new THREE.SphereGeometry(r, 32, 16);
+    }
+    if (geomNode.Cone) {
+        const h = geomNode.Cone["@height"] || 2;
+        const r = geomNode.Cone["@bottomRadius"] || 1;
+        return new THREE.ConeGeometry(r, h, 32);
+    }
+    if (geomNode.Cylinder) {
+        const h = geomNode.Cylinder["@height"] || 2;
+        const r = geomNode.Cylinder["@radius"] || 1;
+        return new THREE.CylinderGeometry(r, r, h, 32);
+    }
+
+    // Mesh-based
+    if (geomNode.IndexedFaceSet) {
+        const ifs = geomNode.IndexedFaceSet;
+        const coords = ifs.Coordinate?.["@point"] || [];
+        const indices = ifs["@coordIndex"] || [];
+
+        const geom = new THREE.BufferGeometry();
+        const verts = new Float32Array(coords);
+        geom.setAttribute("position", new THREE.BufferAttribute(verts, 3));
+        geom.setIndex(indices);
+        geom.computeVertexNormals();
+        return geom;
+    }
+
+    // ElevationGrid
+    if (geomNode.ElevationGrid) {
+        const eg = geomNode.ElevationGrid;
+        const xDim = eg["@xDimension"];
+        const zDim = eg["@zDimension"];
+        const xStep = eg["@xSpacing"] || 1;
+        const zStep = eg["@zSpacing"] || 1;
+        const heights = eg["@height"] || [];
+
+        const geom = new THREE.PlaneGeometry(
+            xDim * xStep,
+            zDim * zStep,
+            xDim - 1,
+            zDim - 1
+        );
+
+        const pos = geom.attributes.position;
+        for (let i = 0; i < heights.length; i++) {
+            pos.setY(i, heights[i]);
+        }
+        pos.needsUpdate = true;
+        geom.computeVertexNormals();
+        return geom;
+    }
+
+    // 2D primitives (extruded into 3D)
+    if (geomNode.Rectangle2D) {
+        const s = geomNode.Rectangle2D["@size"] || [1,1];
+        return new THREE.PlaneGeometry(s[0], s[1]);
+    }
+    if (geomNode.Circle2D) {
+        const r = geomNode.Circle2D["@radius"] || 1;
+        return new THREE.CircleGeometry(r, 32);
+    }
+    if (geomNode.Disk2D) {
+        const r = geomNode.Disk2D["@outerRadius"] || 1;
+        return new THREE.RingGeometry(0, r, 32);
+    }
+
+    // Triangle sets
+    if (geomNode.TriangleSet) {
+        const coords = geomNode.TriangleSet.Coordinate?.["@point"] || [];
+        const geom = new THREE.BufferGeometry();
+        geom.setAttribute("position", new THREE.BufferAttribute(new Float32Array(coords), 3));
+        geom.computeVertexNormals();
+        return geom;
+    }
+
+    // Fallback
+    console.warn("Unsupported X3D geometry:", geomNode);
+    return null;
+}
+
+function createCompoundRigidBody(def, shapeNodes, mass, pos, colorArray) {
+    const material = new THREE.MeshPhongMaterial({ color: new THREE.Color(...colorArray) });
+
+    // Parent Three.js object representing the whole rigid body
+    const parent = new THREE.Object3D();
+    parent.position.set(pos[0], pos[1], pos[2]);
+    scene.add(parent);
+
+    // Bullet compound shape
+    const compound = new Ammo.btCompoundShape();
+    const localInertia = new Ammo.btVector3(0, 0, 0);
+
+    shapeNodes.forEach(shapeNode => {
+        const geomNode = shapeNode["-geometry"];
+        const geometry = parseX3DGeometry(geomNode);
+        if (!geometry) return;
+
+        geometry.computeBoundingBox();
+        const bb = geometry.boundingBox;
+        const sx = bb.max.x - bb.min.x;
+        const sy = bb.max.y - bb.min.y;
+        const sz = bb.max.z - bb.min.z;
+
+        // Center of this geometry in its local space
+        const cx = (bb.min.x + bb.max.x) * 0.5;
+        const cy = (bb.min.y + bb.max.y) * 0.5;
+        const cz = (bb.min.z + bb.max.z) * 0.5;
+
+        // Three.js child mesh
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        mesh.position.set(cx, cy, cz);
+        parent.add(mesh);
+
+        // Bullet child shape
+        const shape = new Ammo.btBoxShape(new Ammo.btVector3(sx * 0.5, sy * 0.5, sz * 0.5));
+        shape.setMargin(margin);
+
+        const childTransform = new Ammo.btTransform();
+        childTransform.setIdentity();
+        childTransform.setOrigin(new Ammo.btVector3(cx, cy, cz));
+
+        compound.addChildShape(childTransform, shape);
+    });
+
+    // Compute inertia for the compound
+    compound.calculateLocalInertia(mass, localInertia);
+
+    const startTransform = new Ammo.btTransform();
+    startTransform.setIdentity();
+    startTransform.setOrigin(new Ammo.btVector3(pos[0], pos[1], pos[2]));
+
+    const motionState = new Ammo.btDefaultMotionState(startTransform);
+    const rbInfo = new Ammo.btRigidBodyConstructionInfo(mass, motionState, compound, localInertia);
+    const body = new Ammo.btRigidBody(rbInfo);
+
+    parent.userData.physicsBody = body;
+
+    if (mass > 0) {
+        rigidBodies.push(parent);
+        body.setActivationState(4);
+    }
+
+    physicsWorld.addRigidBody(body);
+    if (def) parsedBodiesMap[def] = { mesh: parent, body };
+}
+
 function parseRigidBodyCollection(collection) {
     if (!collection) {
         console.error("No RigidBodyCollection found.");
@@ -185,35 +368,49 @@ function parseRigidBodyCollection(collection) {
     // 1. Parse Bodies
     if (collection["-bodies"]) {
         collection["-bodies"].forEach(bodyNode => {
-            if (bodyNode.RigidBody) {
+	    if (bodyNode.RigidBody) {
                 const rb = bodyNode.RigidBody;
                 const mass = rb["@mass"];
                 const pos = rb["@position"];
                 const def = rb["@DEF"];
 
-                const geomField = rb["-geometry"];
-                const collidableShapeNode = Array.isArray(geomField) ? geomField[0] : geomField;
-                const shapeNode = collidableShapeNode?.CollidableShape?.["-shape"]?.Shape;
+                const shapeNodes = extractShapeNodes(rb["-geometry"]);
+                if (!shapeNodes.length) {
+                    console.warn("RigidBody has no shapeNodes:", rb);
+                    return;
+                }
+            
+                // Use the first shape’s color as the visual material color
+                const firstShape = shapeNodes[0];
+                const color = firstShape?.["-appearance"]?.Appearance?.["-material"]?.Material?.["@diffuseColor"] || [1, 1, 1];
 
-                const size = shapeNode?.["-geometry"]?.Box?.["@size"] || [1, 1, 1];
-                const col = shapeNode?.["-appearance"]?.Appearance?.["-material"]?.Material?.["@diffuseColor"] || [Math.random(), Math.random(), Math.random()];
-
-                createRigidBody(def, size, mass, pos, col);
-
+                createCompoundRigidBody(def, shapeNodes, mass, pos, color);
             } else if (bodyNode.SoftBody) {
-                const sb = bodyNode.SoftBody;
+	        const sb = bodyNode.SoftBody;
+                const shapeNodes = extractShapeNodes(sb["-geometry"]);
+                if (!shapeNodes.length) {
+                    console.warn("SoftBody has no shapeNodes:", sb);
+                    return;
+                }
 
-                const geomField = sb["-geometry"];
-                const collidableShapeNode = Array.isArray(geomField) ? geomField[0] : geomField;
-                const shapeNode = collidableShapeNode?.CollidableShape?.["-shape"]?.Shape;
-
-                const geometryNode = shapeNode?.["-geometry"];
+                // Option 2: only use the first shape for soft bodies
+                const shapeNode = shapeNodes[0];
+                const geomNode = shapeNode["-geometry"];
                 const col = shapeNode?.["-appearance"]?.Appearance?.["-material"]?.Material?.["@diffuseColor"] || [0.8, 0.8, 0.8];
 
-                if (geometryNode?.ElevationGrid) {
+                if (!geomNode) {
+                    console.warn("SoftBody without geometry", sb);
+                    return;
+                }
+
+                if (geomNode.ElevationGrid) {
                     createSoftBodyCloth(sb, shapeNode, col);
-                } else if (geometryNode?.Sphere) {
+                } else if (geomNode.Sphere) {
                     createSoftBodySphere(sb, shapeNode, col);
+                } else if (geomNode.Polyline2D || geomNode.NurbsCurve) {
+                    createSoftBodyRope(sb, shapeNode, col);
+                } else {
+                    createSoftBodyFromGeometry(sb, shapeNode, col);
                 }
             }
         });
@@ -230,6 +427,209 @@ function parseRigidBodyCollection(collection) {
         });
     }
 }
+
+function createRigidBodyFromGeometry(def, geometry, mass, pos, colorArray) {
+    const material = new THREE.MeshPhongMaterial({ color: new THREE.Color(...colorArray) });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.position.set(pos[0], pos[1], pos[2]);
+    scene.add(mesh);
+
+    // Compute bounding box for collision shape
+    geometry.computeBoundingBox();
+    const bb = geometry.boundingBox;
+    const sx = bb.max.x - bb.min.x;
+    const sy = bb.max.y - bb.min.y;
+    const sz = bb.max.z - bb.min.z;
+
+    const shape = new Ammo.btBoxShape(new Ammo.btVector3(sx * 0.5, sy * 0.5, sz * 0.5));
+    shape.setMargin(margin);
+
+    const transform = new Ammo.btTransform();
+    transform.setIdentity();
+    transform.setOrigin(new Ammo.btVector3(pos[0], pos[1], pos[2]));
+    const motionState = new Ammo.btDefaultMotionState(transform);
+
+    const localInertia = new Ammo.btVector3(0,0,0);
+    shape.calculateLocalInertia(mass, localInertia);
+
+    const rbInfo = new Ammo.btRigidBodyConstructionInfo(mass, motionState, shape, localInertia);
+    const body = new Ammo.btRigidBody(rbInfo);
+
+    mesh.userData.physicsBody = body;
+
+    if (mass > 0) {
+        rigidBodies.push(mesh);
+        body.setActivationState(4);
+    }
+
+    physicsWorld.addRigidBody(body);
+    if (def) parsedBodiesMap[def] = { mesh, body };
+}
+
+function createSoftBodyFromGeometry(sbConfig, shapeNode, colorArray) {
+    const pos = sbConfig["@position"] || [0,0,0];
+    const mass = sbConfig["@mass"] || 1;
+
+    const geomNode = shapeNode["-geometry"];
+    const geometry = parseX3DGeometry(geomNode);
+    if (!geometry) {
+        console.warn("SoftBody generic: unsupported geometry", geomNode);
+        return;
+    }
+
+    geometry.computeVertexNormals();
+    geometry.translate(pos[0], pos[1], pos[2]);
+
+    const material = new THREE.MeshLambertMaterial({
+        color: new THREE.Color(...colorArray),
+        side: THREE.DoubleSide
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.frustumCulled = false;
+    scene.add(mesh);
+
+    // Build tri mesh for Ammo
+    const softBodyHelpers = new Ammo.btSoftBodyHelpers();
+    const vertices = geometry.attributes.position.array;
+    let indices;
+
+    if (geometry.index) {
+        indices = geometry.index.array;
+    } else {
+        // assume non‑indexed triangles
+        indices = new Uint16Array(vertices.length / 3);
+        for (let i = 0; i < indices.length; i++) indices[i] = i;
+    }
+
+    const triMeshSoftBody = softBodyHelpers.CreateFromTriMesh(
+        physicsWorld.getWorldInfo(),
+        vertices,
+        indices,
+        indices.length / 3,
+        true
+    );
+
+    const sbCfg = triMeshSoftBody.get_m_cfg();
+    sbCfg.set_viterations(10);
+    sbCfg.set_piterations(10);
+    sbCfg.set_kDF(0.2);
+    sbCfg.set_kDP(0.01);
+    sbCfg.set_kPR(5);
+
+    const sbMat = triMeshSoftBody.get_m_materials().at(0);
+    sbMat.set_m_kLST(0.4);
+    sbMat.set_m_kAST(0.4);
+    sbMat.set_m_kVST(0.4);
+
+    triMeshSoftBody.setTotalMass(mass, false);
+    Ammo.castObject(triMeshSoftBody, Ammo.btCollisionObject)
+        .getCollisionShape()
+        .setMargin(margin);
+
+    physicsWorld.addSoftBody(triMeshSoftBody, 1, -1);
+    triMeshSoftBody.setActivationState(4);
+
+    // Map geometry vertices to soft‑body nodes
+    const nodes = triMeshSoftBody.get_m_nodes();
+    const numNodes = nodes.size();
+    const mapping = [];
+    const positions = geometry.attributes.position.array;
+
+    for (let i = 0; i < positions.length / 3; i++) {
+        let vx = positions[i * 3];
+        let vy = positions[i * 3 + 1];
+        let vz = positions[i * 3 + 2];
+        let minDist = Infinity;
+        let minIdx = -1;
+        for (let j = 0; j < numNodes; j++) {
+            const nodePos = nodes.at(j).get_m_x();
+            const dx = vx - nodePos.x();
+            const dy = vy - nodePos.y();
+            const dz = vz - nodePos.z();
+            const dist = dx*dx + dy*dy + dz*dz;
+            if (dist < minDist) {
+                minDist = dist;
+                minIdx = j;
+            }
+        }
+        mapping.push(minIdx);
+    }
+
+    mesh.userData.physicsBody = triMeshSoftBody;
+    mesh.userData.isGenericSoft = true;
+    mesh.userData.mapping = mapping;
+
+    const def = sbConfig["@DEF"];
+    if (def) parsedBodiesMap[def] = { mesh, body: triMeshSoftBody, isSoft: true };
+    softBodies.push(mesh);
+}
+
+function createSoftBodyRope(sbConfig, shapeNode, colorArray) {
+    const pos = sbConfig["@position"] || [0,0,0];
+    const mass = sbConfig["@mass"] || 1;
+
+    const geomNode = shapeNode["-geometry"];
+    let points = [];
+
+    if (geomNode.Polyline2D) {
+        const pts = geomNode.Polyline2D["@lineSegments"] || geomNode.Polyline2D["@point"] || [];
+        for (let i = 0; i < pts.length; i += 2) {
+            points.push(new THREE.Vector3(pts[i], pts[i+1], 0));
+        }
+    } else if (geomNode.NurbsCurve) {
+        const ctrl = geomNode.NurbsCurve.Coordinate?.["@point"] || [];
+        for (let i = 0; i < ctrl.length; i += 3) {
+            points.push(new THREE.Vector3(ctrl[i], ctrl[i+1], ctrl[i+2]));
+        }
+    }
+
+    if (points.length < 2) {
+        console.warn("Rope soft body: not enough points", geomNode);
+        return;
+    }
+
+    // Three.js line for visualization
+    const ropeGeom = new THREE.BufferGeometry().setFromPoints(points);
+    ropeGeom.translate(pos[0], pos[1], pos[2]);
+    const ropeMat = new THREE.LineBasicMaterial({ color: new THREE.Color(...colorArray) });
+    const ropeMesh = new THREE.Line(ropeGeom, ropeMat);
+    ropeMesh.frustumCulled = false;
+    scene.add(ropeMesh);
+
+    // Ammo rope
+    const softBodyHelpers = new Ammo.btSoftBodyHelpers();
+    const worldInfo = physicsWorld.getWorldInfo();
+
+    const start = new Ammo.btVector3(points[0].x + pos[0], points[0].y + pos[1], points[0].z + pos[2]);
+    const end   = new Ammo.btVector3(points[points.length-1].x + pos[0], points[points.length-1].y + pos[1], points[points.length-1].z + pos[2]);
+
+    const ropeSoftBody = softBodyHelpers.CreateRope(worldInfo, start, end, points.length - 1, 0);
+    ropeSoftBody.setTotalMass(mass, false);
+
+    const sbCfg = ropeSoftBody.get_m_cfg();
+    sbCfg.set_viterations(10);
+    sbCfg.set_piterations(10);
+    sbCfg.set_kDP(0.01);
+    sbCfg.set_kDF(0.2);
+
+    physicsWorld.addSoftBody(ropeSoftBody, 1, -1);
+    ropeSoftBody.setActivationState(4);
+
+    ropeMesh.userData.physicsBody = ropeSoftBody;
+    ropeMesh.userData.isRope = true;
+
+    const def = sbConfig["@DEF"];
+    if (def) parsedBodiesMap[def] = { mesh: ropeMesh, body: ropeSoftBody, isSoft: true };
+    softBodies.push(ropeMesh);
+
+    Ammo.destroy(start);
+    Ammo.destroy(end);
+}
+
 
 function createRigidBody(def, size, mass, pos, colorArray) {
     const [sx, sy, sz] = size;
@@ -459,32 +859,46 @@ function animate() {
 
     // Update Soft Bodies
     softBodies.forEach(mesh => {
-        const softBody = mesh.userData.physicsBody;
-        const positions = mesh.geometry.attributes.position.array;
-        const nodes = softBody.get_m_nodes();
+	const softBody = mesh.userData.physicsBody;
+	const nodes = softBody.get_m_nodes();
 
-        if (mesh.userData.isSphere) {
-            const mapping = mesh.userData.mapping;
-            for (let i = 0; i < mapping.length; i++) {
-                const nodePos = nodes.at(mapping[i]).get_m_x();
-                positions[i * 3]     = nodePos.x();
-                positions[i * 3 + 1] = nodePos.y();
-                positions[i * 3 + 2] = nodePos.z();
-            }
-        } else {
-            const numVerts = positions.length / 3;
-            let idx = 0;
-            for (let i = 0; i < numVerts; i++) {
-                const nodePos = nodes.at(i).get_m_x();
-                positions[idx++] = nodePos.x();
-                positions[idx++] = nodePos.y();
-                positions[idx++] = nodePos.z();
-            }
-        }
-
-        mesh.geometry.computeVertexNormals();
-        mesh.geometry.attributes.position.needsUpdate = true;
-        mesh.geometry.attributes.normal.needsUpdate = true;
+	if (mesh.userData.isSphere || mesh.userData.isGenericSoft) {
+	    const mapping = mesh.userData.mapping;
+	    const positions = mesh.geometry.attributes.position.array;
+	    for (let i = 0; i < mapping.length; i++) {
+		const nodePos = nodes.at(mapping[i]).get_m_x();
+		positions[i * 3]     = nodePos.x();
+		positions[i * 3 + 1] = nodePos.y();
+		positions[i * 3 + 2] = nodePos.z();
+	    }
+	    mesh.geometry.computeVertexNormals();
+	    mesh.geometry.attributes.position.needsUpdate = true;
+	    mesh.geometry.attributes.normal.needsUpdate = true;
+	} else if (mesh.userData.isCloth) {
+	    const positions = mesh.geometry.attributes.position.array;
+	    const numVerts = positions.length / 3;
+	    let idx = 0;
+	    for (let i = 0; i < numVerts; i++) {
+		const nodePos = nodes.at(i).get_m_x();
+		positions[idx++] = nodePos.x();
+		positions[idx++] = nodePos.y();
+		positions[idx++] = nodePos.z();
+	    }
+	    mesh.geometry.computeVertexNormals();
+	    mesh.geometry.attributes.position.needsUpdate = true;
+	    mesh.geometry.attributes.normal.needsUpdate = true;
+	} else if (mesh.userData.isRope) {
+	    const positions = mesh.geometry.attributes.position.array;
+	    const numVerts = positions.length / 3;
+	    let idx = 0;
+	    for (let i = 0; i < numVerts; i++) {
+		const nodePos = nodes.at(i).get_m_x();
+		positions[idx++] = nodePos.x();
+		positions[idx++] = nodePos.y();
+		positions[idx++] = nodePos.z();
+	    }
+	    mesh.geometry.attributes.position.needsUpdate = true;
+	}
     });
 
     // Update Rigid Bodies
