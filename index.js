@@ -199,11 +199,11 @@ function createSoftBodyCloth(sbConfig) {
     clothSoftBody.setActivationState(4);
 
     // Parse Anchors mapped to JSON RigidBodies
-    if (sbConfig["-anchors"]) {
-        sbConfig["-anchors"].forEach(anchorNode => {
-            const anc = anchorNode.SoftBodyAnchor;
+    if (sbConfig["-stitches"]) {
+        sbConfig["-stitches"].forEach(anchorNode => {
+            const anc = anchorNode.Stitch;
             const target = parsedBodiesMap[anc["@rigidBody"]];
-            if (target) clothSoftBody.appendAnchor(anc["@nodeIndex"], target.body, false, anc["@influence"]);
+            if (target) clothSoftBody.appendAnchor(anc["@index"], target.body, false, anc["@weight"]);
         });
     }
     softBodies.push(clothMesh);
