@@ -338,12 +338,19 @@ function createSoftBodySphere(sbConfig, shapeNode, colorArray) {
 }
 
 function createHinge(jointConfig) {
-    const b1 = parsedBodiesMap[jointConfig["@body1"]];
-    const b2 = parsedBodiesMap[jointConfig["@body2"]];
+    // Extract the body names from the nested SFNode structures
+    const b1Name = jointConfig["-body1"]?.RigidBody?.["@USE"] || jointConfig["@body1"];
+    const b2Name = jointConfig["-body2"]?.RigidBody?.["@USE"] || jointConfig["@body2"];
+
+    const b1 = parsedBodiesMap[b1Name];
+    const b2 = parsedBodiesMap[b2Name];
     const ap = jointConfig["@anchorPoint"];
     const ax = jointConfig["@axis"];
 
-    if (!b1 || !b2) return;
+    if (!b1 || !b2) {
+        console.warn(`Hinge creation failed: Missing one or both connected bodies (${b1Name}, ${b2Name})`);
+        return;
+    }
 
     const pA = new Ammo.btVector3(ap[0] - b1.mesh.position.x, ap[1] - b1.mesh.position.y, ap[2] - b1.mesh.position.z);
     const pB = new Ammo.btVector3(ap[0] - b2.mesh.position.x, ap[1] - b2.mesh.position.y, ap[2] - b2.mesh.position.z);

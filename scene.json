@@ -185,10 +185,18 @@
               {
                 "SingleAxisHingeJoint": {
                   "@DEF": "ArmHinge",
-                  "@body1": "Pylon",
-                  "@body2": "Arm",
                   "@anchorPoint": [-3, 6, -5],
-                  "@axis": [0, 1, 0]
+                  "@axis": [0, 1, 0],
+                  "-body1": {
+                    "RigidBody": {
+                      "@USE": "Pylon"
+                    }
+                  },
+                  "-body2": {
+                    "RigidBody": {
+                      "@USE": "Arm"
+                    }
+                  }
                 }
               }
             ]
