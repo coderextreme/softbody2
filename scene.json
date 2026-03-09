@@ -57,54 +57,54 @@
           "RigidBodyCollection": {
             "@gravity": [0, -9.8, 0],
             "-bodies": [
-              { "RigidBody": { "@DEF": "Ground", "@mass": 0, "@position": [0, -0.5, 0], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.8, 0.8] } } } }, "-geometry": { "Box": { "@size": [40, 1, 40] } } } } } } } },
-              { "RigidBody": { "@DEF": "Base", "@mass": 0, "@position": [-3, 0.1, -5], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.37, 0.37, 0.37] } } } }, "-geometry": { "Box": { "@size": [1, 0.2, 1] } } } } } } } },
-              { "RigidBody": { "@DEF": "Pylon", "@mass": 0, "@position": [-3, 3, -5], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.37, 0.37, 0.37] } } } }, "-geometry": { "Box": { "@size": [0.4, 6, 0.4] } } } } } } } },
-              { "RigidBody": { "@DEF": "Arm", "@mass": 2, "@position": [-3, 6.2, -1.5], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.37, 0.37, 0.37] } } } }, "-geometry": { "Box": { "@size": [0.4, 0.4, 7.4] } } } } } } } },
+              { "RigidBody": { "@DEF": "Ground", "@mass": 0, "@position": [0, -0.5, 0], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.8, 0.8] } } } }, "-geometry": { "Box": { "@size": [40, 1, 40] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Base", "@mass": 0, "@position": [-3, 0.1, -5], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.37, 0.37, 0.37] } } } }, "-geometry": { "Box": { "@size": [1, 0.2, 1] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Pylon", "@mass": 0, "@position": [-3, 3, -5], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.37, 0.37, 0.37] } } } }, "-geometry": { "Box": { "@size": [0.4, 6, 0.4] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Arm", "@mass": 2, "@position": [-3, 6.2, -1.5], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.37, 0.37, 0.37] } } } }, "-geometry": { "Box": { "@size": [0.4, 0.4, 7.4] } } } } } } ] } },
 
-              { "RigidBody": { "@DEF": "Brick_L1_1", "@mass": 0.5, "@position": [0, 0.3, -4.2], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
-              { "RigidBody": { "@DEF": "Brick_L1_2", "@mass": 0.5, "@position": [0, 0.3, -3.0], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.7, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
-              { "RigidBody": { "@DEF": "Brick_L1_3", "@mass": 0.5, "@position": [0, 0.3, -1.8], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.4, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
-              { "RigidBody": { "@DEF": "Brick_L1_4", "@mass": 0.5, "@position": [0, 0.3, -0.6], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.6, 0.2, 0.1] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
-              { "RigidBody": { "@DEF": "Brick_L1_5", "@mass": 0.5, "@position": [0, 0.3, 0.6], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
-              { "RigidBody": { "@DEF": "Brick_L1_6", "@mass": 0.5, "@position": [0, 0.3, 1.8], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.7, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
-              { "RigidBody": { "@DEF": "Brick_L1_7", "@mass": 0.5, "@position": [0, 0.3, 3.0], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.4, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
-              { "RigidBody": { "@DEF": "Brick_L1_8", "@mass": 0.5, "@position": [0, 0.3, 4.2], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.6, 0.2, 0.1] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
+              { "RigidBody": { "@DEF": "Brick_L1_1", "@mass": 0.5, "@position": [0, 0.3, -4.2], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Brick_L1_2", "@mass": 0.5, "@position": [0, 0.3, -3.0], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.7, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Brick_L1_3", "@mass": 0.5, "@position": [0, 0.3, -1.8], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.4, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Brick_L1_4", "@mass": 0.5, "@position": [0, 0.3, -0.6], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.6, 0.2, 0.1] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Brick_L1_5", "@mass": 0.5, "@position": [0, 0.3, 0.6], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Brick_L1_6", "@mass": 0.5, "@position": [0, 0.3, 1.8], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.7, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Brick_L1_7", "@mass": 0.5, "@position": [0, 0.3, 3.0], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.4, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Brick_L1_8", "@mass": 0.5, "@position": [0, 0.3, 4.2], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.6, 0.2, 0.1] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
 
-              { "RigidBody": { "@DEF": "Brick_L2_1", "@mass": 0.5, "@position": [0, 0.9, -3.6], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.6, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
-              { "RigidBody": { "@DEF": "Brick_L2_2", "@mass": 0.5, "@position": [0, 0.9, -2.4], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.7, 0.4, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
-              { "RigidBody": { "@DEF": "Brick_L2_3", "@mass": 0.5, "@position": [0, 0.9, -1.2], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
-              { "RigidBody": { "@DEF": "Brick_L2_4", "@mass": 0.5, "@position": [0, 0.9, 0.0], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.6, 0.2, 0.1] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
-              { "RigidBody": { "@DEF": "Brick_L2_5", "@mass": 0.5, "@position": [0, 0.9, 1.2], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.6, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
-              { "RigidBody": { "@DEF": "Brick_L2_6", "@mass": 0.5, "@position": [0, 0.9, 2.4], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.7, 0.4, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
-              { "RigidBody": { "@DEF": "Brick_L2_7", "@mass": 0.5, "@position": [0, 0.9, 3.6], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
+              { "RigidBody": { "@DEF": "Brick_L2_1", "@mass": 0.5, "@position": [0, 0.9, -3.6], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.6, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Brick_L2_2", "@mass": 0.5, "@position": [0, 0.9, -2.4], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.7, 0.4, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Brick_L2_3", "@mass": 0.5, "@position": [0, 0.9, -1.2], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Brick_L2_4", "@mass": 0.5, "@position": [0, 0.9, 0.0], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.6, 0.2, 0.1] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Brick_L2_5", "@mass": 0.5, "@position": [0, 0.9, 1.2], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.6, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Brick_L2_6", "@mass": 0.5, "@position": [0, 0.9, 2.4], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.7, 0.4, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Brick_L2_7", "@mass": 0.5, "@position": [0, 0.9, 3.6], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
 
-              { "RigidBody": { "@DEF": "Brick_L3_1", "@mass": 0.5, "@position": [0, 1.5, -3.0], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
-              { "RigidBody": { "@DEF": "Brick_L3_2", "@mass": 0.5, "@position": [0, 1.5, -1.8], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.7, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
-              { "RigidBody": { "@DEF": "Brick_L3_3", "@mass": 0.5, "@position": [0, 1.5, -0.6], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.4, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
-              { "RigidBody": { "@DEF": "Brick_L3_4", "@mass": 0.5, "@position": [0, 1.5, 0.6], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
-              { "RigidBody": { "@DEF": "Brick_L3_5", "@mass": 0.5, "@position": [0, 1.5, 1.8], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.7, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
-              { "RigidBody": { "@DEF": "Brick_L3_6", "@mass": 0.5, "@position": [0, 1.5, 3.0], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.4, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
+              { "RigidBody": { "@DEF": "Brick_L3_1", "@mass": 0.5, "@position": [0, 1.5, -3.0], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Brick_L3_2", "@mass": 0.5, "@position": [0, 1.5, -1.8], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.7, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Brick_L3_3", "@mass": 0.5, "@position": [0, 1.5, -0.6], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.4, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Brick_L3_4", "@mass": 0.5, "@position": [0, 1.5, 0.6], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Brick_L3_5", "@mass": 0.5, "@position": [0, 1.5, 1.8], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.7, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Brick_L3_6", "@mass": 0.5, "@position": [0, 1.5, 3.0], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.4, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
 
-              { "RigidBody": { "@DEF": "Brick_L4_1", "@mass": 0.5, "@position": [0, 2.1, -2.4], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.6, 0.2, 0.1] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
-              { "RigidBody": { "@DEF": "Brick_L4_2", "@mass": 0.5, "@position": [0, 2.1, -1.2], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
-              { "RigidBody": { "@DEF": "Brick_L4_3", "@mass": 0.5, "@position": [0, 2.1, 0.0], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.6, 0.2, 0.1] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
-              { "RigidBody": { "@DEF": "Brick_L4_4", "@mass": 0.5, "@position": [0, 2.1, 1.2], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
-              { "RigidBody": { "@DEF": "Brick_L4_5", "@mass": 0.5, "@position": [0, 2.1, 2.4], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.6, 0.2, 0.1] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
+              { "RigidBody": { "@DEF": "Brick_L4_1", "@mass": 0.5, "@position": [0, 2.1, -2.4], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.6, 0.2, 0.1] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Brick_L4_2", "@mass": 0.5, "@position": [0, 2.1, -1.2], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Brick_L4_3", "@mass": 0.5, "@position": [0, 2.1, 0.0], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.6, 0.2, 0.1] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Brick_L4_4", "@mass": 0.5, "@position": [0, 2.1, 1.2], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Brick_L4_5", "@mass": 0.5, "@position": [0, 2.1, 2.4], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.6, 0.2, 0.1] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
 
-              { "RigidBody": { "@DEF": "Brick_L5_1", "@mass": 0.5, "@position": [0, 2.7, -1.8], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.7, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
-              { "RigidBody": { "@DEF": "Brick_L5_2", "@mass": 0.5, "@position": [0, 2.7, -0.6], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.4, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
-              { "RigidBody": { "@DEF": "Brick_L5_3", "@mass": 0.5, "@position": [0, 2.7, 0.6], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.7, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
-              { "RigidBody": { "@DEF": "Brick_L5_4", "@mass": 0.5, "@position": [0, 2.7, 1.8], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.4, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
+              { "RigidBody": { "@DEF": "Brick_L5_1", "@mass": 0.5, "@position": [0, 2.7, -1.8], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.7, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Brick_L5_2", "@mass": 0.5, "@position": [0, 2.7, -0.6], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.4, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Brick_L5_3", "@mass": 0.5, "@position": [0, 2.7, 0.6], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.7, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Brick_L5_4", "@mass": 0.5, "@position": [0, 2.7, 1.8], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.4, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
 
-              { "RigidBody": { "@DEF": "Brick_L6_1", "@mass": 0.5, "@position": [0, 3.3, -1.2], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
-              { "RigidBody": { "@DEF": "Brick_L6_2", "@mass": 0.5, "@position": [0, 3.3, 0.0], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.6, 0.2, 0.1] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
-              { "RigidBody": { "@DEF": "Brick_L6_3", "@mass": 0.5, "@position": [0, 3.3, 1.2], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
+              { "RigidBody": { "@DEF": "Brick_L6_1", "@mass": 0.5, "@position": [0, 3.3, -1.2], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Brick_L6_2", "@mass": 0.5, "@position": [0, 3.3, 0.0], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.6, 0.2, 0.1] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Brick_L6_3", "@mass": 0.5, "@position": [0, 3.3, 1.2], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
 
-              { "RigidBody": { "@DEF": "Brick_L7_1", "@mass": 0.5, "@position": [0, 3.9, -0.6], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.7, 0.4, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
-              { "RigidBody": { "@DEF": "Brick_L7_2", "@mass": 0.5, "@position": [0, 3.9, 0.6], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.7, 0.4, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } },
+              { "RigidBody": { "@DEF": "Brick_L7_1", "@mass": 0.5, "@position": [0, 3.9, -0.6], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.7, 0.4, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Brick_L7_2", "@mass": 0.5, "@position": [0, 3.9, 0.6], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.7, 0.4, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
 
-              { "RigidBody": { "@DEF": "Brick_L8_1", "@mass": 0.5, "@position": [0, 4.5, 0.0], "-geometry": { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } } }
+              { "RigidBody": { "@DEF": "Brick_L8_1", "@mass": 0.5, "@position": [0, 4.5, 0.0], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } }
             ],
             "-softBodies": [
               {
@@ -112,31 +112,33 @@
                   "@DEF": "Cloth",
                   "@mass": 1.5,
                   "@position": [-3, 1.0, 2.0],
-                  "-geometry": {
-                    "CollidableShape": {
-                      "-shape": {
-                        "Shape": {
-                          "-appearance": {
-                            "Appearance": {
-                              "-material": {
-                                "Material": {
-                                  "@diffuseColor": [0.9, 0.9, 0.9]
+                  "-geometry": [
+                    {
+                      "CollidableShape": {
+                        "-shape": {
+                          "Shape": {
+                            "-appearance": {
+                              "Appearance": {
+                                "-material": {
+                                  "Material": {
+                                    "@diffuseColor": [0.9, 0.9, 0.9]
+                                  }
                                 }
                               }
-                            }
-                          },
-                          "-geometry": {
-                            "ElevationGrid": {
-                              "@xDimension": 36,
-                              "@zDimension": 26,
-                              "@xSpacing": 0.2,
-                              "@zSpacing": 0.2
+                            },
+                            "-geometry": {
+                              "ElevationGrid": {
+                                "@xDimension": 36,
+                                "@zDimension": 26,
+                                "@xSpacing": 0.2,
+                                "@zSpacing": 0.2
+                              }
                             }
                           }
                         }
                       }
                     }
-                  },
+                  ],
                   "-stitches": [
                     { "Stitch": { "@index": 0, "@rigidBody": "Arm", "@weight": 1.0 } },
                     { "Stitch": { "@index": 7, "@rigidBody": "Arm", "@weight": 1.0 } },
@@ -152,28 +154,30 @@
                   "@DEF": "SquishyBall",
                   "@mass": 2.5,
                   "@position": [0, 15, 1.5],
-                  "-geometry": {
-                    "CollidableShape": {
-                      "-shape": {
-                        "Shape": {
-                          "-appearance": {
-                            "Appearance": {
-                              "-material": {
-                                "Material": {
-                                  "@diffuseColor": [0.2, 0.8, 0.4]
+                  "-geometry": [
+                    {
+                      "CollidableShape": {
+                        "-shape": {
+                          "Shape": {
+                            "-appearance": {
+                              "Appearance": {
+                                "-material": {
+                                  "Material": {
+                                    "@diffuseColor": [0.2, 0.8, 0.4]
+                                  }
                                 }
                               }
-                            }
-                          },
-                          "-geometry": {
-                            "Sphere": {
-                              "@radius": 1.0
+                            },
+                            "-geometry": {
+                              "Sphere": {
+                                "@radius": 1.0
+                              }
                             }
                           }
                         }
                       }
                     }
-                  }
+                  ]
                 }
               }
             ],

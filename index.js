@@ -113,8 +113,11 @@ function parseSceneJSON(sceneData) {
             const pos = rb["@position"];
             const def = rb["@DEF"];
 
-            // Parse through the nested schema using optional chaining
-            const shapeNode = rb["-geometry"]?.CollidableShape?.["-shape"]?.Shape;
+            // Extract from MFNode array structure
+            const geomField = rb["-geometry"];
+            const collidableShapeNode = Array.isArray(geomField) ? geomField[0] : geomField;
+            const shapeNode = collidableShapeNode?.CollidableShape?.["-shape"]?.Shape;
+
             const size = shapeNode?.["-geometry"]?.Box?.["@size"] || [1, 1, 1];
             const col = shapeNode?.["-appearance"]?.Appearance?.["-material"]?.Material?.["@diffuseColor"] || [Math.random(), Math.random(), Math.random()];
 
@@ -127,15 +130,19 @@ function parseSceneJSON(sceneData) {
         collection["-softBodies"].forEach(sbNode => {
             const sb = sbNode.SoftBody;
             if (sb) {
-                const shapeNode = sb["-geometry"]?.CollidableShape?.["-shape"]?.Shape;
+                // Extract from MFNode array structure
+                const geomField = sb["-geometry"];
+                const collidableShapeNode = Array.isArray(geomField) ? geomField[0] : geomField;
+                const shapeNode = collidableShapeNode?.CollidableShape?.["-shape"]?.Shape;
+
                 const geometryNode = shapeNode?.["-geometry"];
                 const col = shapeNode?.["-appearance"]?.Appearance?.["-material"]?.Material?.["@diffuseColor"] || [0.8, 0.8, 0.8];
 
                 // Determine type based on inner geometry node
                 if (geometryNode?.ElevationGrid) {
-                    createSoftBodyCloth(sb, col);
+                    createSoftBodyCloth(sb, shapeNode, col);
                 } else if (geometryNode?.Sphere) {
-                    createSoftBodySphere(sb, col);
+                    createSoftBodySphere(sb, shapeNode, col);
                 }
             }
         });
@@ -182,12 +189,11 @@ function createRigidBody(def, size, mass, pos, colorArray) {
     if (def) parsedBodiesMap[def] = { mesh, body };
 }
 
-function createSoftBodyCloth(sbConfig, colorArray) {
+function createSoftBodyCloth(sbConfig, shapeNode, colorArray) {
     const pos = sbConfig["@position"];
     const mass = sbConfig["@mass"];
 
     // Fetch geometry details dynamically from X3D ElevationGrid
-    const shapeNode = sbConfig["-geometry"]?.CollidableShape?.["-shape"]?.Shape;
     const grid = shapeNode?.["-geometry"]?.ElevationGrid;
     const xDim = grid?.["@xDimension"] || 36;
     const zDim = grid?.["@zDimension"] || 26;
@@ -245,12 +251,11 @@ function createSoftBodyCloth(sbConfig, colorArray) {
     softBodies.push(clothMesh);
 }
 
-function createSoftBodySphere(sbConfig, colorArray) {
+function createSoftBodySphere(sbConfig, shapeNode, colorArray) {
     const pos = sbConfig["@position"];
     const mass = sbConfig["@mass"];
 
     // Fetch properties dynamically from X3D Sphere Geometry
-    const shapeNode = sbConfig["-geometry"]?.CollidableShape?.["-shape"]?.Shape;
     const sphere = shapeNode?.["-geometry"]?.Sphere;
     const radius = sphere?.["@radius"] || 1.0;
 
