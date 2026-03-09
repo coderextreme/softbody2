@@ -78,6 +78,33 @@
             "@direction": [0.4667, -1, -1]
           }
         },
+	{ 
+	  "Transform": {
+	    "@translation": [0, 6, 0],
+	    "-children": [
+	      {
+		"Shape": {
+		  "-geometry": {
+		    "Text": {
+		      "@string": ["X3D JSON", "Ammo.js", "Three.JS", "WebGPU"],
+		      "-fontStyle": { "FontStyle": { "@size": 0.8 } }
+		    }
+		  },
+		  "-appearance": {
+		    "Appearance": {
+		      "-material": {
+			"Material": {
+			  "@diffuseColor": [1, 1, 0],
+			  "@emissiveColor": [0.5, 0.5, 0]
+			}
+		      }
+		    }
+		  }
+		}
+	      }
+	    ]
+	  }
+	},
         {
           "RigidBodyCollection": {
             "@gravity": [0, -9.8, 0],

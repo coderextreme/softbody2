@@ -1,6 +1,9 @@
-import { FontLoader } from 'three/examples/jsm/loaders/FontLoader.js';
-import { NURBSSurface } from 'three/examples/jsm/curves/NURBSSurface.js';
-import { ParametricGeometry } from 'three/examples/jsm/geometries/ParametricGeometry.js';
+// import * as THREE from 'three';
+// import { WebGPURenderer } from 'three/webgpu';
+// import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+// import WebGPU from 'three/addons/capabilities/WebGPU.js';
+//import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry.js';
+//import { FontLoader } from 'three/examples/jsm/loaders/FontLoader.js';
 
 let physicsWorld, scene, camera, renderer, controls;
 let clock = new THREE.Clock();
@@ -27,8 +30,6 @@ const styleMap = {
   'ITALIC':     'italic',
   'BOLDITALIC': 'bold', // Three.js fonts don't always have bold+italic
 };
-
-const loader = new FontLoader();
 
 // Ensure the page is fully parsed before executing
 window.addEventListener('load', () => {
@@ -216,15 +217,25 @@ function parseSpotLight(slData) {
 }
 
 // X3D: { "NurbsSurface": {
-//   "uOrder": 3, "vOrder": 3,
-//   "uDimension": 4, "vDimension": 4,
-//   "uKnot": [...], "vKnot": [...],
-//   "Coordinate": { "point": [...] }
+//   "@uOrder": 3, "@vOrder": 3,
+//   "@uDimension": 4, "@vDimension": 4,
+//   "@uKnot": [...], "@vKnot": [...],
+//   "-controlPoint": { "Coordinate": { "@point": [...] } }
 // }}
-function x3dNurbsSurfaceToThree({ uOrder, vOrder, uDimension, vDimension,
-                                   uKnot, vKnot, Coordinate }) {
-  const ctrlPts = Coordinate.point.map(p =>
-    new THREE.Vector4(p[0], p[1], p[2], 1.0));
+function x3dNurbsSurfaceToThree(node) {
+  const uOrder = node["@uOrder"] !== undefined ? node["@uOrder"] : 3;
+  const vOrder = node["@vOrder"] !== undefined ? node["@vOrder"] : 3;
+  const uDimension = node["@uDimension"] || 0;
+  const vDimension = node["@vDimension"] || 0;
+  const uKnot = node["@uKnot"] || [];
+  const vKnot = node["@vKnot"] || [];
+
+  const coordNode = node["-controlPoint"]?.Coordinate || node["-coord"]?.Coordinate || node.Coordinate;
+  const pts = coordNode?.["@point"] || [];
+  const ctrlPts = [];
+  for (let i = 0; i < pts.length; i += 3) {
+      ctrlPts.push(new THREE.Vector4(pts[i], pts[i + 1], pts[i + 2], 1.0));
+  }
 
   const surface = new NURBSSurface(
     uOrder - 1, vOrder - 1, uKnot, vKnot,
@@ -240,19 +251,24 @@ function x3dNurbsSurfaceToThree({ uOrder, vOrder, uDimension, vDimension,
 }
 
 // TriangleSet: raw triangle soup — vertices are already in order
-function x3dTriangleSetToThree({ Coordinate }) {
+function x3dTriangleSetToThree(node) {
+  const coordNode = node["-coord"]?.Coordinate || node.Coordinate;
+  const pts = coordNode?.["@point"] || [];
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position',
-    new THREE.Float32BufferAttribute(Coordinate.point.flat(), 3));
+    new THREE.Float32BufferAttribute(pts, 3));
   geo.computeVertexNormals();
   return geo;
 }
 
 // IndexedTriangleSet: like above but with an index buffer
-function x3dIndexedTriangleSetToThree({ index = [], Coordinate }) {
+function x3dIndexedTriangleSetToThree(node) {
+  const index = node["@index"] || [];
+  const coordNode = node["-coord"]?.Coordinate || node.Coordinate;
+  const pts = coordNode?.["@point"] || [];
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position',
-    new THREE.Float32BufferAttribute(Coordinate.point.flat(), 3));
+    new THREE.Float32BufferAttribute(pts, 3));
   geo.setIndex(index);
   geo.computeVertexNormals();
   return geo;
@@ -280,10 +296,10 @@ function fanToTriangles(fan) {
 
 async function createTextGeometry(textData) {
       const fontStyle = textData['-fontStyle']?.FontStyle;
-      const justify = fontStyle["@justify"] || ['BEGIN'];
-      const family = (fontStyle["@family"] || ['SANS'])[0].toUpperCase();
+      const justify = fontStyle?.["@justify"] || ['BEGIN'];
+      const family = (fontStyle?.["@family"] || ['SANS'])[0].toUpperCase();
       const fontFile = fontMap[family] || fontMap['SANS'];
-         
+
       const font = await new Promise((resolve, reject) => {
         new FontLoader().load(
           fontFile,
@@ -329,32 +345,34 @@ function parseX3DGeometry(geomNode) {
 
     // 3D primitives
     if (geomNode.Text) {
-	return createTextGeometry(textData);
+	return createTextGeometry(geomNode.Text);
     }
     if (geomNode.Extrusion) {
         const crossSection = geomNode.Extrusion["@crossSection"];
         const spine = geomNode.Extrusion["@spine"];
         const scale = geomNode.Extrusion["@scale"];
-        const beginCap = true;
-        const endCap = true;
+        const beginCap = geomNode.Extrusion["@beginCap"] ?? true;
+        const endCap = geomNode.Extrusion["@endCap"] ?? true;
 
 	// 1. Build the 2D Shape from crossSection
 	const shape = new THREE.Shape();
-	for (let i = 0; i < crossSection.length; i += 2) {
-	  const x = crossSection[i];
-	  const y = crossSection[i + 1];
-	  if (i === 0) shape.moveTo(x, y);
-	  else shape.lineTo(x, y);
+	if (crossSection) {
+	    for (let i = 0; i < crossSection.length; i += 2) {
+	      const x = crossSection[i];
+	      const y = crossSection[i + 1];
+	      if (i === 0) shape.moveTo(x, y);
+	      else shape.lineTo(x, y);
+	    }
+	    shape.closePath();
 	}
-	shape.closePath();
 
 	// 2. Build the spine as a CatmullRomCurve3
-	const spinePoints = spine.map(p => new THREE.Vector3(p[0], p[1], p[2]));
+	const spinePoints = (spine || []).map(p => new THREE.Vector3(p[0], p[1], p[2]));
 	const path = new THREE.CatmullRomCurve3(spinePoints);
 
         // 3. Extrude along spine path
 	const extrudeSettings = {
-	  steps: spine.length * 4,
+	  steps: (spine || []).length * 4,
 	  extrudePath: path,
 	  bevelEnabled: false,
 	};
@@ -383,7 +401,8 @@ function parseX3DGeometry(geomNode) {
     // Mesh-based
     if (geomNode.IndexedFaceSet) {
         const ifs = geomNode.IndexedFaceSet;
-        const coords = ifs.Coordinate?.["@point"] || [];
+        const coordNode = ifs["-coord"]?.Coordinate || ifs.Coordinate;
+        const coords = coordNode?.["@point"] || [];
         const indices = ifs["@coordIndex"] || [];
 
         const geom = new THREE.BufferGeometry();
@@ -435,11 +454,11 @@ function parseX3DGeometry(geomNode) {
 
     // Triangle sets
     if (geomNode.TriangleSet) {
-        const coords = geomNode.TriangleSet.Coordinate?.["@point"] || [];
-        const geom = new THREE.BufferGeometry();
-        geom.setAttribute("position", new THREE.BufferAttribute(new Float32Array(coords), 3));
-        geom.computeVertexNormals();
-        return geom;
+        return x3dTriangleSetToThree(geomNode.TriangleSet);
+    }
+
+    if (geomNode.NurbsSurface) {
+        return x3dNurbsSurfaceToThree(geomNode.NurbsSurface);
     }
 
     // Fallback
@@ -521,7 +540,7 @@ function parseRigidBodyCollection(collection) {
         return;
     }
 
-    const gravity = collection["@gravity"];
+    const gravity = collection["@gravity"] || [0, -9.8, 0];
     physicsWorld.setGravity(new Ammo.btVector3(gravity[0], gravity[1], gravity[2]));
     physicsWorld.getWorldInfo().set_m_gravity(new Ammo.btVector3(gravity[0], gravity[1], gravity[2]));
 
@@ -539,7 +558,7 @@ function parseRigidBodyCollection(collection) {
                     console.warn("RigidBody has no shapeNodes:", rb);
                     return;
                 }
-            
+
                 // Use the first shape’s color as the visual material color
                 const firstShape = shapeNodes[0];
                 const color = firstShape?.["-appearance"]?.Appearance?.["-material"]?.Material?.["@diffuseColor"] || [1, 1, 1];
@@ -741,7 +760,8 @@ function createSoftBodyRope(sbConfig, shapeNode, colorArray) {
             points.push(new THREE.Vector3(pts[i], pts[i+1], 0));
         }
     } else if (geomNode.NurbsCurve) {
-        const ctrl = geomNode.NurbsCurve.Coordinate?.["@point"] || [];
+        const coordNode = geomNode.NurbsCurve["-controlPoint"]?.Coordinate;
+        const ctrl = coordNode?.["@point"] || [];
         for (let i = 0; i < ctrl.length; i += 3) {
             points.push(new THREE.Vector3(ctrl[i], ctrl[i+1], ctrl[i+2]));
         }
@@ -824,8 +844,8 @@ function createRigidBody(def, size, mass, pos, colorArray) {
 }
 
 function createSoftBodyCloth(sbConfig, shapeNode, colorArray) {
-    const pos = sbConfig["@position"];
-    const mass = sbConfig["@mass"];
+    const pos = sbConfig["@position"] || [0,0,0];
+    const mass = sbConfig["@mass"] || 1;
 
     const grid = shapeNode?.["-geometry"]?.ElevationGrid;
     const xDim = grid?.["@xDimension"] || 36;
@@ -874,13 +894,12 @@ function createSoftBodyCloth(sbConfig, shapeNode, colorArray) {
 }
 
 function createSoftBodySphere(sbConfig, shapeNode, colorArray) {
-    const pos = sbConfig["@position"];
-    const mass = sbConfig["@mass"];
+    const pos = sbConfig["@position"] || [0,0,0];
+    const mass = sbConfig["@mass"] || 1;
 
     const sphere = shapeNode?.["-geometry"]?.Sphere;
     const radius = sphere?.["@radius"] || 1.0;
 
-    // const geometry = new THREE.IcosahedronBufferGeometry(radius, 3);
     const geometry = new THREE.SphereGeometry(radius, 32, 16);
     geometry.translate(pos[0], pos[1], pos[2]);
 
@@ -952,13 +971,12 @@ function createSoftBodySphere(sbConfig, shapeNode, colorArray) {
     softBodies.push(mesh);
 }
 
-// { "CADAssembly": { "name": "Engine", "children": [...] } }
-
+// { "CADAssembly": { "@name": "Engine", "-children": [...] } }
 function x3dCADAssemblyToThree(node) {
   const group = new THREE.Group();
-  group.name = node.name || 'CADAssembly';
+  group.name = node["@name"] || 'CADAssembly';
 
-  (node.children || []).forEach(child => {
+  (node["-children"] || []).forEach(child => {
     if (child.CADPart) {
       group.add(x3dCADPartToThree(child.CADPart));
     }
@@ -969,21 +987,20 @@ function x3dCADAssemblyToThree(node) {
 
 // X3D:
 // { "CADPart": {
-//     "name": "Bolt",
-//     "translation": [1, 0, 0],
-//     "rotation": [0, 1, 0, 1.5708],
-//     "scale": [1, 1, 1],
-//     "children": [...]
+//     "@name": "Bolt",
+//     "@translation": [1, 0, 0],
+//     "@rotation": [0, 1, 0, 1.5708],
+//     "@scale": [1, 1, 1],
+//     "-children": [...]
 // }}
-
 function x3dCADPartToThree(node) {
   const group = new THREE.Group();
-  group.name = node.name || 'CADPart';
+  group.name = node["@name"] || 'CADPart';
 
   // Apply transform
-  const t = node.translation || [0, 0, 0];
-  const r = node.rotation    || [0, 0, 1, 0]; // axis-angle
-  const s = node.scale       || [1, 1, 1];
+  const t = node["@translation"] || [0, 0, 0];
+  const r = node["@rotation"]    || [0, 0, 1, 0]; // axis-angle
+  const s = node["@scale"]       || [1, 1, 1];
 
   group.position.set(t[0], t[1], t[2]);
   group.quaternion.setFromAxisAngle(
@@ -991,7 +1008,7 @@ function x3dCADPartToThree(node) {
   );
   group.scale.set(s[0], s[1], s[2]);
 
-  (node.children || []).forEach(child => {
+  (node["-children"] || []).forEach(child => {
     if (child.CADFace) {
       group.add(x3dCADFaceToThree(child.CADFace));
     }
@@ -1002,34 +1019,29 @@ function x3dCADPartToThree(node) {
 
 // X3D:
 // { "CADFace": {
-//     "name": "TopFace",
-//     "Shape": {
-//       "Appearance": { "Material": { "diffuseColor": [0.8, 0.2, 0.2] } },
-//       "geometry": { "IndexedFaceSet": { ... } }
-//     }
+//     "@name": "TopFace",
+//     "-shape": { "Shape": {
+//       "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.2, 0.2] } } } },
+//       "-geometry": { "IndexedFaceSet": { ... } }
+//     } }
 // }}
-
 function x3dCADFaceToThree(node) {
-  const shape = node.Shape;
+  const shape = node["-shape"]?.Shape || node.Shape;
   if (!shape) return new THREE.Group();
 
-  // Build geometry (reuse IndexedFaceSet converter from earlier)
   let geometry;
-  const geomNode = shape.geometry || {};
+  const geomNode = shape["-geometry"] || {};
+  geometry = parseX3DGeometry(geomNode);
 
-  if (geomNode.IndexedFaceSet)
-    geometry = x3dIndexedFaceSetToThree(geomNode.IndexedFaceSet);
-  else if (geomNode.NurbsSurface)
-    geometry = x3dNurbsSurfaceToThree(geomNode.NurbsSurface);
-  else if (geomNode.TriangleSet)
-    geometry = x3dTriangleSetToThree(geomNode.TriangleSet);
+  if (!geometry) geometry = new THREE.BufferGeometry();
 
   // Build material from Appearance
-  const mat   = shape.Appearance?.Material || {};
-  const dc    = mat.diffuseColor  || [0.8, 0.8, 0.8];
-  const sc    = mat.specularColor || [0.2, 0.2, 0.2];
-  const shine = mat.shininess     ?? 0.2;
-  const trans = mat.transparency  ?? 0;
+  const appNode = shape["-appearance"]?.Appearance || {};
+  const mat   = appNode["-material"]?.Material || {};
+  const dc    = mat["@diffuseColor"]  || [0.8, 0.8, 0.8];
+  const sc    = mat["@specularColor"] || [0.2, 0.2, 0.2];
+  const shine = mat["@shininess"]     ?? 0.2;
+  const trans = mat["@transparency"]  ?? 0;
 
   const material = new THREE.MeshPhongMaterial({
     color:     new THREE.Color(dc[0], dc[1], dc[2]),
@@ -1041,7 +1053,7 @@ function x3dCADFaceToThree(node) {
   });
 
   const mesh = new THREE.Mesh(geometry, material);
-  mesh.name = node.name || 'CADFace';
+  mesh.name = node["@name"] || 'CADFace';
   return mesh;
 }
 
@@ -1053,23 +1065,30 @@ function parseX3DCAD(x3dJSON) {
     if (node.CADAssembly) {
       const group = x3dCADAssemblyToThree(node.CADAssembly);
       parent.add(group);
-      (node.CADAssembly.children || []).forEach(c => processNode(c, group));
+      (node.CADAssembly["-children"] || []).forEach(c => processNode(c, group));
     }
     else if (node.CADPart) {
       const part = x3dCADPartToThree(node.CADPart);
       parent.add(part);
-      (node.CADPart.children || []).forEach(c => processNode(c, part));
+      (node.CADPart["-children"] || []).forEach(c => processNode(c, part));
     }
     else if (node.CADFace) {
       parent.add(x3dCADFaceToThree(node.CADFace));
     }
     else if (node.Shape) {
-      parent.add(x3dShapeToThree(node.Shape));
+      const mesh = x3dCADFaceToThree({ "-shape": { Shape: node.Shape } });
+      parent.add(mesh);
     }
     else if (node.Transform) {
-      const g = x3dTransformToThree(node.Transform);
+      const g = new THREE.Group();
+      const t = node.Transform["@translation"] || [0, 0, 0];
+      const r = node.Transform["@rotation"]    || [0, 0, 1, 0];
+      const s = node.Transform["@scale"]       || [1, 1, 1];
+      g.position.set(t[0], t[1], t[2]);
+      g.quaternion.setFromAxisAngle(new THREE.Vector3(r[0], r[1], r[2]).normalize(), r[3]);
+      g.scale.set(s[0], s[1], s[2]);
       parent.add(g);
-      (node.Transform.children || []).forEach(c => processNode(c, g));
+      (node.Transform["-children"] || []).forEach(c => processNode(c, g));
     }
   }
 
@@ -1082,6 +1101,18 @@ function parseX3DCAD(x3dJSON) {
 const threeScene = parseX3DCAD(myX3DJsonData);
 scene.add(threeScene);
 */
+
+function x3dNurbsCurveToThree(node) {
+  const coordNode = node["-controlPoint"]?.Coordinate;
+  const pts = coordNode?.["@point"] || [];
+  const points = [];
+  for (let i = 0; i < pts.length; i += 3) {
+      points.push(new THREE.Vector3(pts[i], pts[i+1], pts[i+2]));
+  }
+  const curve = points.length > 1 ? new THREE.CatmullRomCurve3(points) : new THREE.LineCurve3(new THREE.Vector3(), new THREE.Vector3());
+  const geometry = new THREE.BufferGeometry().setFromPoints(points);
+  return { curve, geometry };
+}
 
 function x3dNurbsCurveAsEdge(node, material = null) {
   const { curve, geometry } = x3dNurbsCurveToThree(node);
