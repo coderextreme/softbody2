@@ -30,9 +30,21 @@
     <script src="https://cdn.jsdelivr.net/gh/kripken/ammo.js@main/builds/ammo.js"></script>
 
     <!-- 2. Three.js and OrbitControls -->
+    <!--
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    -->
     <!-- 3. Engine / Parser Script -->
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.183.2/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.183.2/examples/jsm/"
+        }
+      }
+    </script>
+    <!--
+    <script src="https://cdn.jsdelivr.net/npm/three@0.183.2/examples/js/controls/OrbitControls.js"></script>
+    -->
     <script src="index.js" type="module"></script>
 </body>
 </html>

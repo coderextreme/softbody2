@@ -1,12 +1,12 @@
-// import * as THREE from 'three';
-// import { WebGPURenderer } from 'three/webgpu';
-// import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import * as THREE from 'three';
+import { WebGPURenderer } from 'three/webgpu';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 // import WebGPU from 'three/addons/capabilities/WebGPU.js';
-//import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry.js';
-//import { FontLoader } from 'three/examples/jsm/loaders/FontLoader.js';
+import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry.js';
+import { FontLoader } from 'three/addons/loaders/FontLoader.js';
 
 let physicsWorld, scene, camera, renderer, controls;
-let clock = new THREE.Clock();
+let timer = new THREE.Timer();
 let rigidBodies = [];
 let softBodies = [];
 let parsedBodiesMap = {};
@@ -18,9 +18,9 @@ let transformAux1;
 
 // X3D FontStyle.family → typeface JSON file mapping
 const fontMap = {
-  'SERIF':      'fonts/gentilis_regular.typeface.json',
-  'SANS':       'fonts/helvetiker_regular.typeface.json',
-  'TYPEWRITER': 'fonts/droid/droid_sans_mono_regular.typeface.json',
+  'SERIF':      'https://threejs.org/examples/fonts/gentilis_regular.typeface.json',
+  'SANS':       'https://threejs.org/examples/fonts/helvetiker_regular.typeface.json',
+  'TYPEWRITER': 'https://threejs.org/examples/fonts/droid/droid_sans_mono_regular.typeface.json',
 };
 
 // X3D FontStyle.style → font variant file suffix
@@ -41,11 +41,11 @@ window.addEventListener('load', () => {
     }
 
     // Initialize Ammo.js
-    Ammo().then((AmmoLib) => {
+    Ammo().then(async (AmmoLib) => {
         window.Ammo = AmmoLib;
         transformAux1 = new Ammo.btTransform();
 
-        initGraphics();
+        await initGraphics();
         initPhysics();
         initInput();
 
@@ -63,7 +63,7 @@ window.addEventListener('load', () => {
     });
 });
 
-function initGraphics() {
+async function initGraphics() {
     const container = document.getElementById('container');
     container.innerHTML = ""; // Clear loading messages
 
@@ -72,13 +72,15 @@ function initGraphics() {
 
     scene = new THREE.Scene();
 
-    renderer = new THREE.WebGLRenderer({ antialias: true });
+    // renderer = new THREE.WebGPURenderer({ antialias: true });
+    renderer = new WebGPURenderer({ antialias: true });
+    await renderer.init(); // WebGPURenderer requires async init!
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.shadowMap.enabled = true;
     container.appendChild(renderer.domElement);
 
-    controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls = new OrbitControls(camera, renderer.domElement);
 
     window.addEventListener('resize', onWindowResize, false);
 }
@@ -98,18 +100,157 @@ function parseSceneJSON(sceneData) {
 
     if (children) {
         children.forEach(child => {
-            if (child.Background) parseBackground(child.Background);
-            if (child.Viewpoint) parseViewpoint(child.Viewpoint);
-            if (child.EnvironmentLight) parseEnvironmentLight(child.EnvironmentLight);
-            if (child.DirectionalLight) parseDirectionalLight(child.DirectionalLight);
-            if (child.PointLight) parsePointLight(child.PointLight);
-            if (child.SpotLight) parseSpotLight(child.SpotLight);
-            if (child.RigidBodyCollection) parseRigidBodyCollection(child.RigidBodyCollection);
+            if (child.Background)           parseBackground(child.Background);
+            if (child.Viewpoint)            parseViewpoint(child.Viewpoint);
+            if (child.EnvironmentLight)     parseEnvironmentLight(child.EnvironmentLight);
+            if (child.DirectionalLight)     parseDirectionalLight(child.DirectionalLight);
+            if (child.PointLight)           parsePointLight(child.PointLight);
+            if (child.SpotLight)            parseSpotLight(child.SpotLight);
+            if (child.Transform)            parseTransform(child.Transform, scene);
+            if (child.RigidBodyCollection)  parseRigidBodyCollection(child.RigidBodyCollection);
         });
     } else if (sceneData.RigidBodyCollection) {
         // Fallback for previous structure
         parseRigidBodyCollection(sceneData.RigidBodyCollection);
     }
+}
+
+// ---------------------------------------------------------------------------
+// X3D Transform
+//
+// The full X3D Transform matrix is:
+//   M = T(translation) * T(center) * R(rotation) * S(scale) * T(-center)
+//
+// Fields:
+//   @translation  [x y z]          default [0 0 0]
+//   @center       [x y z]          default [0 0 0]  (pivot for rotation/scale)
+//   @rotation     [ax ay az angle] default [0 0 1 0]
+//   @scale        [x y z]          default [1 1 1]
+//   -children     array of child nodes
+// ---------------------------------------------------------------------------
+
+/**
+ * Compose the X3D transform onto a THREE.Group using matrix math so that
+ * all five fields interact correctly (center offset is applied and removed).
+ */
+function applyX3DTransform(group, tfData) {
+    const t = tfData["@translation"] || [0, 0, 0];
+    const c = tfData["@center"]      || [0, 0, 0];
+    const r = tfData["@rotation"]    || [0, 0, 1, 0];
+    const s = tfData["@scale"]       || [1, 1, 1];
+
+    // Build each component matrix
+    const T  = new THREE.Matrix4().makeTranslation(t[0], t[1], t[2]);
+    const Tc = new THREE.Matrix4().makeTranslation( c[0],  c[1],  c[2]);
+    const Tn = new THREE.Matrix4().makeTranslation(-c[0], -c[1], -c[2]);
+    const R  = new THREE.Matrix4().makeRotationAxis(
+                   new THREE.Vector3(r[0], r[1], r[2]).normalize(), r[3]);
+    const S  = new THREE.Matrix4().makeScale(s[0], s[1], s[2]);
+
+    // M = T * Tc * R * S * Tn
+    const M = new THREE.Matrix4();
+    M.multiply(T).multiply(Tc).multiply(R).multiply(S).multiply(Tn);
+
+    group.applyMatrix4(M);
+}
+
+/**
+ * Parse a single X3D Shape node and add the resulting mesh(es) to parentGroup.
+ * Handles async Text geometry transparently.
+ */
+function parseShapeNode(shapeData, parentGroup) {
+    if (!shapeData) return;
+
+    const geomNode = shapeData["-geometry"];
+    const appNode  = shapeData["-appearance"]?.Appearance;
+    const matData  = appNode?.["-material"]?.Material;
+
+    const diffuse  = matData?.["@diffuseColor"]  || [1, 1, 1];
+    const emissive = matData?.["@emissiveColor"]  || [0, 0, 0];
+    const opacity  = matData?.["@transparency"] !== undefined
+                     ? 1.0 - matData["@transparency"] : 1.0;
+
+    const material = new THREE.MeshPhongMaterial({
+        color:       new THREE.Color(...diffuse),
+        emissive:    new THREE.Color(...emissive),
+        transparent: opacity < 1.0,
+        opacity,
+        side: THREE.DoubleSide,
+    });
+
+    /** Actually attach geometry (or a Group of meshes) to parentGroup */
+    const attach = (geo) => {
+        if (!geo) return;
+        if (geo instanceof THREE.Group) {
+            // createTextGeometry can return a Group for multi-line text
+            geo.traverse(child => {
+                if (child.isMesh) {
+                    child.material     = material.clone();
+                    child.castShadow   = true;
+                    child.receiveShadow = true;
+                }
+            });
+            parentGroup.add(geo);
+        } else {
+            const mesh = new THREE.Mesh(geo, material);
+            mesh.castShadow    = true;
+            mesh.receiveShadow = true;
+            parentGroup.add(mesh);
+        }
+    };
+
+    const result = parseX3DGeometry(geomNode);
+
+    if (result instanceof Promise) {
+        result.then(attach).catch(err => console.warn("Shape geometry error:", err));
+    } else {
+        attach(result);
+    }
+}
+
+/**
+ * Recursively walk an array of X3D child nodes, dispatching each to the
+ * appropriate parser and attaching results to parentGroup.
+ *
+ * Supported node types inside a Transform:
+ *   Shape, Transform, Group (treated as Transform with no fields),
+ *   DirectionalLight, PointLight, SpotLight
+ */
+function parseTransformChildren(children, parentGroup) {
+    if (!children) return;
+    children.forEach(child => {
+        if (child.Shape) {
+            parseShapeNode(child.Shape, parentGroup);
+        }
+        else if (child.Transform) {
+            const g = new THREE.Group();
+            applyX3DTransform(g, child.Transform);
+            parentGroup.add(g);
+            parseTransformChildren(child.Transform["-children"], g);
+        }
+        else if (child.Group) {
+            const g = new THREE.Group();
+            parentGroup.add(g);
+            parseTransformChildren(child.Group["-children"], g);
+        }
+        else if (child.DirectionalLight) { parseDirectionalLight(child.DirectionalLight); }
+        else if (child.PointLight)       { parsePointLight(child.PointLight); }
+        else if (child.SpotLight)        { parseSpotLight(child.SpotLight); }
+    });
+}
+
+/**
+ * Entry point: create a Group, apply the X3D transform, parse all children,
+ * then attach to the given parent (typically `scene`).
+ */
+function parseTransform(tfData, parentGroup) {
+    const group = new THREE.Group();
+
+    applyX3DTransform(group, tfData);
+    parseTransformChildren(tfData["-children"], group);
+
+    parentGroup.add(group);
+    return group;
 }
 
 function extractShapeNodes(geomArray) {
@@ -151,8 +292,15 @@ function parseViewpoint(vpData) {
     }
     if (vpData["@centerOfRotation"]) {
         const cor = vpData["@centerOfRotation"];
-        controls.target.set(cor[0], cor[1], cor[2]);
-        controls.update();
+	if (cor) {
+	    camera.lookAt(cor[0], cor[1], cor[2]);
+            if (controls) {
+	    	controls.target.set(cor[0], cor[1], cor[2]);
+	    }
+	}
+	if (controls) {
+            controls.update();
+	}
     }
 }
 
@@ -311,14 +459,14 @@ async function createTextGeometry(textData) {
       const size    = fontStyle?.['@size'] ?? 1;
 
       if (strings.length === 1) {
-        const geometry = new THREE.TextGeometry(strings[0], { font, size, depth: 0, curveSegments: 12 });
+        const geometry = new TextGeometry(strings[0], { font, size, depth: 0, curveSegments: 12 });
         geometry.computeVertexNormals();
         return geometry;
       }
 
       const group = new THREE.Group();
       strings.forEach((str, index) => {
-        const geometry = new THREE.TextGeometry(str, { font, size, depth: 0, curveSegments: 12 });
+        const geometry = new TextGeometry(str, { font, size, depth: 0, curveSegments: 12 });
         if (justify[0] === 'MIDDLE') {
           geometry.computeBoundingBox();
           const centerX = (geometry.boundingBox.max.x - geometry.boundingBox.min.x) / 2;
@@ -858,7 +1006,7 @@ function createSoftBodyCloth(sbConfig, shapeNode, colorArray) {
     const width = segZ * xSpacing;
     const height = segY * zSpacing;
 
-    const geometry = new THREE.PlaneBufferGeometry(width, height, segZ, segY);
+    const geometry = new THREE.PlaneGeometry(width, height, segZ, segY);
     geometry.rotateY(Math.PI * 0.5);
     geometry.translate(pos[0], pos[1] + height * 0.5, pos[2] - width * 0.5);
 
@@ -1223,7 +1371,9 @@ function onWindowResize() {
 
 function animate() {
     requestAnimationFrame(animate);
-    const deltaTime = clock.getDelta();
+    timer.update();
+    const deltaTime = Math.min(timer.getDelta(), 0.05); // cap at 50ms / 20fps minimum
+    timer.update(deltaTime);
 
     if (globalHinge) globalHinge.enableAngularMotor(true, 0.8 * armMovement, 50);
 
@@ -1285,6 +1435,8 @@ function animate() {
         }
     });
 
-    controls.update();
+    if (controls) {
+        controls.update();
+    }
     renderer.render(scene, camera);
 }

@@ -3,6 +3,11 @@ import { defineConfig } from 'vite'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [],
+  resolve: {
+    alias: {
+      'three/addons/': '/node_modules/three/examples/jsm/'
+    }
+  },
   optimizeDeps: {
     exclude: ['ammo.js']
   },
