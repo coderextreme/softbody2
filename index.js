@@ -183,11 +183,21 @@ function createRigidBody(def, size, mass, pos, colorArray) {
 
 function createSoftBodyCloth(sbConfig, colorArray) {
     const pos = sbConfig["@position"];
-    const width = sbConfig["@width"];
-    const height = sbConfig["@height"];
-    const segZ = sbConfig["@segmentsZ"];
-    const segY = sbConfig["@segmentsY"];
     const mass = sbConfig["@mass"];
+
+    // Fetch geometry details dynamically from X3D ElevationGrid
+    const shapeNode = sbConfig["-geometry"]?.CollidableShape?.["-shape"]?.Shape;
+    const grid = shapeNode?.["-geometry"]?.ElevationGrid;
+    const xDim = grid?.["@xDimension"] || 36;
+    const zDim = grid?.["@zDimension"] || 26;
+    const xSpacing = grid?.["@xSpacing"] || 0.2;
+    const zSpacing = grid?.["@zSpacing"] || 0.2;
+
+    // Convert ElevationGrid definitions back to width, height, and segments expected by Three/Ammo
+    const segZ = xDim - 1;
+    const segY = zDim - 1;
+    const width = segZ * xSpacing;
+    const height = segY * zSpacing;
 
     // BufferGeometry to represent cloth
     const geometry = new THREE.PlaneBufferGeometry(width, height, segZ, segY);
@@ -236,8 +246,12 @@ function createSoftBodyCloth(sbConfig, colorArray) {
 
 function createSoftBodySphere(sbConfig, colorArray) {
     const pos = sbConfig["@position"];
-    const radius = sbConfig["@radius"];
     const mass = sbConfig["@mass"];
+
+    // Fetch properties dynamically from X3D Sphere Geometry
+    const shapeNode = sbConfig["-geometry"]?.CollidableShape?.["-shape"]?.Shape;
+    const sphere = shapeNode?.["-geometry"]?.Sphere;
+    const radius = sphere?.["@radius"] || 1.0;
 
     // Icosahedron detail=3 for smooth surface matching
     const geometry = new THREE.IcosahedronBufferGeometry(radius, 3);

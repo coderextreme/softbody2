@@ -41,7 +41,6 @@
             "@name":"identifier",
             "@content":"https://coderextreme.net/X3DJSONLD/src/main/data/softbodyscene.json"
           },
-
           {
             "@name":"reference",
             "@content":"https://github.com/kripken/ammo.js/blob/main/examples/webgl_demo_softbody_cloth/index.html"
@@ -114,10 +113,6 @@
                   "@type": "Cloth",
                   "@mass": 1.5,
                   "@position": [-3, 1.0, 2.0],
-                  "@width": 7.0,
-                  "@height": 5.0,
-                  "@segmentsZ": 35,
-                  "@segmentsY": 25,
                   "-geometry": {
                     "CollidableShape": {
                       "-shape": {
@@ -129,6 +124,14 @@
                                   "@diffuseColor": [0.9, 0.9, 0.9]
                                 }
                               }
+                            }
+                          },
+                          "-geometry": {
+                            "ElevationGrid": {
+                              "@xDimension": 36,
+                              "@zDimension": 26,
+                              "@xSpacing": 0.2,
+                              "@zSpacing": 0.2
                             }
                           }
                         }
@@ -151,7 +154,6 @@
                   "@type": "Sphere",
                   "@mass": 2.5,
                   "@position": [0, 15, 1.5],
-                  "@radius": 1.0,
                   "-geometry": {
                     "CollidableShape": {
                       "-shape": {
@@ -163,6 +165,11 @@
                                   "@diffuseColor": [0.2, 0.8, 0.4]
                                 }
                               }
+                            }
+                          },
+                          "-geometry": {
+                            "Sphere": {
+                              "@radius": 1.0
                             }
                           }
                         }
