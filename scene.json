@@ -129,8 +129,8 @@
               { "RigidBody": { "@DEF": "Brick_L7_1", "@mass": 0.5, "@position": [0, 3.9, -0.6], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.7, 0.4, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
               { "RigidBody": { "@DEF": "Brick_L7_2", "@mass": 0.5, "@position": [0, 3.9, 0.6], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.7, 0.4, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
 
-              { "RigidBody": { "@DEF": "Brick_L8_1", "@mass": 0.5, "@position": [0, 4.5, 0.0], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } }
-            ,
+              { "RigidBody": { "@DEF": "Brick_L8_1", "@mass": 0.5, "@position": [0, 4.5, 0.0], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
+              { "RigidBody": { "@DEF": "Cylinder", "@mass": 0.5, "@position": [0, 4.5, 0.0], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.3, 0.2] } } } }, "-geometry": { "Cylinder": { "@height": 1.0, "@radius": 1.0 } } } } } } ] } } ,
               {
                 "SoftBody": {
                   "@DEF": "Cloth",
