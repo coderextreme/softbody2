@@ -371,8 +371,8 @@ function createStitch(stitchConfig) {
     }
 
     // Parse space-separated index and weight lists
-    const indices = (stitchConfig["@body1Index"] || "").trim().split(/\s+/).map(Number);
-    const weights = (stitchConfig["@weight"] || "").trim().split(/\s+/).map(Number);
+    const indices = (stitchConfig["@body1Index"] || []).map(Number);
+    const weights = (stitchConfig["@weight"] || []).map(Number);
 
     const softBody = sbEntry.body;
     indices.forEach((nodeIndex, i) => {
