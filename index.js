@@ -105,31 +105,28 @@ function parseSceneJSON(sceneData) {
     physicsWorld.setGravity(new Ammo.btVector3(gravity[0], gravity[1], gravity[2]));
     physicsWorld.getWorldInfo().set_m_gravity(new Ammo.btVector3(gravity[0], gravity[1], gravity[2]));
 
-    // 1. Parse Rigid Bodies
+    // 1. Parse Bodies (RigidBody and SoftBody are both stored in -bodies)
     if (collection["-bodies"]) {
         collection["-bodies"].forEach(bodyNode => {
-            const rb = bodyNode.RigidBody;
-            const mass = rb["@mass"];
-            const pos = rb["@position"];
-            const def = rb["@DEF"];
+            if (bodyNode.RigidBody) {
+                const rb = bodyNode.RigidBody;
+                const mass = rb["@mass"];
+                const pos = rb["@position"];
+                const def = rb["@DEF"];
 
-            // Extract from MFNode array structure
-            const geomField = rb["-geometry"];
-            const collidableShapeNode = Array.isArray(geomField) ? geomField[0] : geomField;
-            const shapeNode = collidableShapeNode?.CollidableShape?.["-shape"]?.Shape;
+                // Extract from MFNode array structure
+                const geomField = rb["-geometry"];
+                const collidableShapeNode = Array.isArray(geomField) ? geomField[0] : geomField;
+                const shapeNode = collidableShapeNode?.CollidableShape?.["-shape"]?.Shape;
 
-            const size = shapeNode?.["-geometry"]?.Box?.["@size"] || [1, 1, 1];
-            const col = shapeNode?.["-appearance"]?.Appearance?.["-material"]?.Material?.["@diffuseColor"] || [Math.random(), Math.random(), Math.random()];
+                const size = shapeNode?.["-geometry"]?.Box?.["@size"] || [1, 1, 1];
+                const col = shapeNode?.["-appearance"]?.Appearance?.["-material"]?.Material?.["@diffuseColor"] || [Math.random(), Math.random(), Math.random()];
 
-            createRigidBody(def, size, mass, pos, col);
-        });
-    }
+                createRigidBody(def, size, mass, pos, col);
 
-    // 2. Parse Soft Bodies
-    if (collection["-softBodies"]) {
-        collection["-softBodies"].forEach(sbNode => {
-            const sb = sbNode.SoftBody;
-            if (sb) {
+            } else if (bodyNode.SoftBody) {
+                const sb = bodyNode.SoftBody;
+
                 // Extract from MFNode array structure
                 const geomField = sb["-geometry"];
                 const collidableShapeNode = Array.isArray(geomField) ? geomField[0] : geomField;
@@ -148,11 +145,14 @@ function parseSceneJSON(sceneData) {
         });
     }
 
-    // 3. Parse Joints
+    // 2. Parse Joints (SingleAxisHingeJoint and Stitch are both stored in -joints)
     if (collection["-joints"]) {
         collection["-joints"].forEach(jointNode => {
-            const joint = jointNode.SingleAxisHingeJoint;
-            createHinge(joint);
+            if (jointNode.SingleAxisHingeJoint) {
+                createHinge(jointNode.SingleAxisHingeJoint);
+            } else if (jointNode.Stitch) {
+                createStitch(jointNode.Stitch);
+            }
         });
     }
 }
@@ -240,14 +240,8 @@ function createSoftBodyCloth(sbConfig, shapeNode, colorArray) {
     clothMesh.userData.isCloth = true;
     clothSoftBody.setActivationState(4);
 
-    // Parse Anchors mapped to JSON RigidBodies
-    if (sbConfig["-stitches"]) {
-        sbConfig["-stitches"].forEach(anchorNode => {
-            const anc = anchorNode.Stitch;
-            const target = parsedBodiesMap[anc["@rigidBody"]];
-            if (target) clothSoftBody.appendAnchor(anc["@index"], target.body, false, anc["@weight"]);
-        });
-    }
+    const def = sbConfig["@DEF"];
+    if (def) parsedBodiesMap[def] = { mesh: clothMesh, body: clothSoftBody, isSoft: true };
     softBodies.push(clothMesh);
 }
 
@@ -331,6 +325,9 @@ function createSoftBodySphere(sbConfig, shapeNode, colorArray) {
     }
     mesh.userData.mapping = mapping;
 
+    const def = sbConfig["@DEF"];
+    if (def) parsedBodiesMap[def] = { mesh, body: softBody, isSoft: true };
+
     Ammo.destroy(center);
     Ammo.destroy(radiusVec);
 
@@ -359,6 +356,31 @@ function createHinge(jointConfig) {
     globalHinge = new Ammo.btHingeConstraint(b1.body, b2.body, pA, pB, axis, axis, true);
     physicsWorld.addConstraint(globalHinge, true);
 }
+
+function createStitch(stitchConfig) {
+    // Extract rigid body and soft body names from nested SFNode structures
+    const rbName = stitchConfig["-body1"]?.RigidBody?.["@USE"] || stitchConfig["@body1"];
+    const sbName = stitchConfig["-body2"]?.SoftBody?.["@USE"] || stitchConfig["@body2"];
+
+    const rbEntry = parsedBodiesMap[rbName];
+    const sbEntry = parsedBodiesMap[sbName];
+
+    if (!rbEntry || !sbEntry) {
+        console.warn(`Stitch creation failed: Missing rigid body (${rbName}) or soft body (${sbName})`);
+        return;
+    }
+
+    // Parse space-separated index and weight lists
+    const indices = (stitchConfig["@body1Index"] || "").trim().split(/\s+/).map(Number);
+    const weights = (stitchConfig["@weight"] || "").trim().split(/\s+/).map(Number);
+
+    const softBody = sbEntry.body;
+    indices.forEach((nodeIndex, i) => {
+        const weight = weights[i] !== undefined ? weights[i] : 1.0;
+        softBody.appendAnchor(nodeIndex, rbEntry.body, false, weight);
+    });
+}
+
 
 function initInput() {
     window.addEventListener('keydown', (e) => {
