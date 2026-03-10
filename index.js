@@ -4,12 +4,14 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 // import WebGPU from 'three/addons/capabilities/WebGPU.js';
 import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
 import { FontLoader } from 'three/addons/loaders/FontLoader.js';
+import { loadX3DHumanoid } from './X3DHumanoidLoader.js';
 
 let physicsWorld, scene, camera, renderer, controls;
 let timer = new THREE.Timer();
 let rigidBodies = [];
 let softBodies = [];
 let parsedBodiesMap = {};
+const mixers = []; // Allows for processing any dynamically loaded HAnim mixers
 let globalHinge = null;
 let armMovement = 0;
 const margin = 0.05;
@@ -55,8 +57,8 @@ window.addEventListener('load', () => {
                 if (!response.ok) throw new Error("Could not load scene.json");
                 return response.json();
             })
-            .then(json => {
-                parseSceneJSON(json.X3D.Scene);
+            .then(async (json) => {
+                await parseSceneJSON(json.X3D.Scene);
                 animate();
             })
             .catch(err => console.error("Error loading scene.json:", err));
@@ -95,18 +97,18 @@ function initPhysics() {
     physicsWorld = new Ammo.btSoftRigidDynamicsWorld(dispatcher, broadphase, solver, collisionConfiguration, softBodySolver);
 }
 
-function parseSceneJSON(sceneData) {
+async function parseSceneJSON(sceneData) {
     const children = sceneData["-children"];
 
     if (children) {
-        children.forEach(child => {
+        children.forEach(async (child) => {
             if (child.Background)           parseBackground(child.Background);
             if (child.Viewpoint)            parseViewpoint(child.Viewpoint);
             if (child.EnvironmentLight)     parseEnvironmentLight(child.EnvironmentLight);
             if (child.DirectionalLight)     parseDirectionalLight(child.DirectionalLight);
             if (child.PointLight)           parsePointLight(child.PointLight);
             if (child.SpotLight)            parseSpotLight(child.SpotLight);
-            if (child.Transform)            parseTransform(child.Transform, scene);
+            if (child.Transform)            await parseTransform(child.Transform, scene);
             if (child.RigidBodyCollection)  parseRigidBodyCollection(child.RigidBodyCollection);
         });
     } else if (sceneData.RigidBodyCollection) {
@@ -216,9 +218,9 @@ function parseShapeNode(shapeData, parentGroup) {
  *   Shape, Transform, Group (treated as Transform with no fields),
  *   DirectionalLight, PointLight, SpotLight
  */
-function parseTransformChildren(children, parentGroup) {
+async function parseTransformChildren(children, parentGroup) {
     if (!children) return;
-    children.forEach(child => {
+    children.forEach(async (child) => {
         if (child.Shape) {
             parseShapeNode(child.Shape, parentGroup);
         }
@@ -226,28 +228,76 @@ function parseTransformChildren(children, parentGroup) {
             const g = new THREE.Group();
             applyX3DTransform(g, child.Transform);
             parentGroup.add(g);
-            parseTransformChildren(child.Transform["-children"], g);
+            await parseTransformChildren(child.Transform["-children"], g);
         }
         else if (child.Group) {
             const g = new THREE.Group();
             parentGroup.add(g);
-            parseTransformChildren(child.Group["-children"], g);
+            await parseTransformChildren(child.Group["-children"], g);
         }
         else if (child.DirectionalLight) { parseDirectionalLight(child.DirectionalLight); }
         else if (child.PointLight)       { parsePointLight(child.PointLight); }
         else if (child.SpotLight)        { parseSpotLight(child.SpotLight); }
-    });
+        else if (child.Inline) {
+            // Handle external scene fetching (Including Humanoids)
+            const urlArray = child.Inline['@url'];
+            if (urlArray && urlArray.length > 0) {
+              const url = urlArray[0];
+              const g = new THREE.Group();
+              parentGroup.add(g);
+
+              try {
+                let inlineJson;
+                try {
+                  // 1. Standard web loading (Expects url available from server, e.g. /public)
+                  const response = await fetch(url);
+                  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                  inlineJson = await response.json();
+               } catch (fetchErr) {
+                  // 2. Fallback to Dynamic Import (Useful if running in strict Vite local '/src' folders)
+                  console.warn(`Fetch failed for Inline ${url}, attempting dynamic import...`, fetchErr.message);
+                  const cleanUrl = url.startsWith('src/') ? url.substring(4) : url;
+                  const module = await import(/* @vite-ignore */ `./${cleanUrl}`);
+                  inlineJson = module.default || module;
+               }
+
+                // A) Parse standard X3D recursive nodes inside the dynamically loaded file.
+                // This injects any local TimeSensors & Routes directly into the global pool so they animate.
+                if (inlineJson.X3D?.Scene) {
+                  await parseSceneNode(inlineJson.X3D.Scene);
+               }
+
+                // B) Invoke specialized loader to resolve specific HAnim nodes
+                const humanoidResult = await loadX3DHumanoid(inlineJson, scene);
+                if (humanoidResult) {
+                  const { mesh, mixer } = humanoidResult;
+                  if (mesh) {
+                    mesh.frustumCulled = false;
+                    g.add(mesh);
+                 }
+                  if (mixer) {
+                    mixers.push(mixer);
+                 }
+               }
+
+          } catch (err) {
+            console.error(`Failed to load Inline scene from ${url}:`, err);
+          }
+        }
+
+      }
+   });
 }
 
 /**
  * Entry point: create a Group, apply the X3D transform, parse all children,
  * then attach to the given parent (typically `scene`).
  */
-function parseTransform(tfData, parentGroup) {
+async function parseTransform(tfData, parentGroup) {
     const group = new THREE.Group();
 
     applyX3DTransform(group, tfData);
-    parseTransformChildren(tfData["-children"], group);
+    await parseTransformChildren(tfData["-children"], group);
 
     parentGroup.add(group);
     return group;
@@ -1374,6 +1424,9 @@ function animate() {
     timer.update();
     const deltaTime = Math.min(timer.getDelta(), 0.05); // cap at 50ms / 20fps minimum
     timer.update(deltaTime);
+    // Update ALL mixers retrieved from Inline loading / humanoid parsing
+    mixers.forEach(mixer => mixer.update(deltaTime));
+
 
     if (globalHinge) globalHinge.enableAngularMotor(true, 0.8 * armMovement, 50);
 

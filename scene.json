@@ -105,6 +105,16 @@
 	    ]
 	  }
 	},
+	{
+              "Transform": {
+	            "@translation": [0, 6, 0],
+                    "@scale": [0.025, 0.025, 0.025],
+                    "@rotation": [1, 0, 0, 1.5708],
+                    "-children": [
+	        	{ "Inline": { "@url" : [ "HumanoidComplete.json" ] } }
+		    ]
+	      }
+        },
         {
           "RigidBodyCollection": {
             "@gravity": [0, -9.8, 0],
