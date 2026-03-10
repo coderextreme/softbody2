@@ -214,7 +214,7 @@ function parseShapeNode(shapeData, parentGroup) {
  * @param {THREE.Scene} scene - The THREE.js scene to add the mesh to
  * @returns {Promise<{ mesh: THREE.SkinnedMesh, mixer: THREE.AnimationMixer }>}
  */
-export async function loadX3DHumanoid(json, scene) {
+export async function loadX3DHumanoid(json, scene, parentGroup) {
     const x3dScene = json.X3D['-Scene'];
     const childrenNodes = x3dScene['-children'] || [];
     
@@ -251,7 +251,12 @@ export async function loadX3DHumanoid(json, scene) {
     
     if (textureNode && textureNode.ImageTexture) {
         const textureUrl = textureNode.ImageTexture['@url'][0];
-        const basePath = "http://localhost:5173/";
+        let basePath = "http://localhost:5173/";
+	if (textureUrl.startsWith("data:")) {
+	    basePath = "";
+	} else {
+	    basePath = window.location.href;
+	}
         const diffuseMap = new THREE.TextureLoader().load(basePath + textureUrl);
         diffuseMap.colorSpace = THREE.SRGBColorSpace;
         diffuseMap.flipY = false; // Python pre-inverts for WebGL mapping
@@ -274,12 +279,19 @@ export async function loadX3DHumanoid(json, scene) {
     
     let boneIndex = 0;
 
-    function parseJoint(jointObj, parentBone) {
+    function parseJoint(jointObj, parentBone, parentGroup) {
         const joint = jointObj.HAnimJoint;
+        const pivot = new THREE.Group();
         const bone = new THREE.Bone();
         bone.name = joint['@name'];
+        applyX3DTransform(pivot, joint);
+	if (parentGroup) {
+		parentGroup.add(pivot);
+		scene.add(parentGroup);
+	}
         
         if (joint['@translation']) bone.position.fromArray(joint['@translation']);
+        if (joint['@center']) bone.position.fromArray(joint['@center']);
         if (joint['@rotation']) {
             const [x, y, z, angle] = joint['@rotation'];
             bone.quaternion.setFromAxisAngle(new THREE.Vector3(x, y, z), angle); // Axis-Angle to Quat
@@ -307,13 +319,13 @@ export async function loadX3DHumanoid(json, scene) {
         
         boneIndex++;
         const children = joint['-children'] || [];
-        children.forEach(c => { if (c.HAnimJoint) parseJoint(c, bone); });
+        children.forEach(c => { if (c.HAnimJoint) parseJoint(c, bone, pivot); });
         return bone;
     }
 
     const rootBones = [];
     for (const rootNode of skeletonNodes) {
-        rootBones.push(parseJoint(rootNode, null));
+        rootBones.push(parseJoint(rootNode, null, null));
     }
 
     geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(skinIndices, 4));
@@ -432,7 +444,7 @@ async function parseTransformChildren(children, parentGroup) {
                }
 
                 // B) Invoke specialized loader to resolve specific HAnim nodes
-                const humanoidResult = await loadX3DHumanoid(inlineJson, scene);
+                const humanoidResult = await loadX3DHumanoid(inlineJson, scene, g);
                 if (humanoidResult) {
                   const { mesh, mixer } = humanoidResult;
                   if (mesh) {

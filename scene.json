@@ -115,6 +115,7 @@
 		    ]
 	      }
         },
+	{ "Inline": { "@url" : [ "walking_man_cc_test_Final.x3dj" ] } },
         {
           "RigidBodyCollection": {
             "@gravity": [0, -9.8, 0],
