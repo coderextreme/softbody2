@@ -4,6 +4,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
 import { FontLoader } from 'three/addons/loaders/FontLoader.js';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
+import { SimplifyModifier } from 'three/addons/modifiers/SimplifyModifier.js';
 
 let physicsWorld, scene, camera, renderer, controls;
 let timer = new THREE.Timer();
@@ -18,6 +19,13 @@ const margin = 0.05;
 let transformAux1;
 let kinematicBones = [];
 let hiddenSkinnedMeshes = []; // Keep track of hidden meshes to manually force their matrix updates
+
+// Reusable temporaries for the animated-jelly COM-relative driving loop.
+const _jellyTarget  = new THREE.Vector3();
+const _jellyVec     = new THREE.Vector3();
+const _jellyMat     = new THREE.Matrix4();
+const _animCOM      = new THREE.Vector3();
+const _physicsCOM   = new THREE.Vector3();
 
 // --- X3D IMPORT/EXPORT & DEF/USE Registries ---
 const globalDefMap = {};
@@ -752,13 +760,11 @@ function createSoftBodyFromGeometry(sbConfig, shapeNode, colorArray) {
 
         material = shapeNode._skinnedMesh.material.clone();
 
-        // Keep the SkinnedMesh VISIBLE — its bone animation plays normally.
-        // The soft body is a separate physics object that starts co-located with
-        // the character, then falls and deforms under gravity and collisions.
-        // NOTE: deliberately NOT anchoring soft-body nodes to kinematic bones here.
-        // appendAnchor runs every solver substep; even low influence values
-        // (e.g. 0.3) converge exponentially to full pinning within ~1 s and
-        // completely prevent gravity from accumulating momentum on any node.
+        // Hide the SkinnedMesh — the soft body IS the visible Gramps.
+        // Track it so the AnimationMixer keeps advancing bone world-matrices every
+        // frame; those are read back for the COM-relative pose driving loop.
+        shapeNode._skinnedMesh.visible = false;
+        hiddenSkinnedMeshes.push(shapeNode._skinnedMesh);
     } else {
         const geomNode = resolveUSE(shapeNode["-geometry"]);
         geometry = parseX3DGeometry(geomNode);
@@ -786,19 +792,43 @@ function createSoftBodyFromGeometry(sbConfig, shapeNode, colorArray) {
     scene.add(mesh);
 
     const softBodyHelpers = new Ammo.btSoftBodyHelpers();
+
+    // Full-res render vertex array — used only for building the node→vert mapping.
     const vertices = geometry.attributes.position.array;
-    let indices = geometry.index ? geometry.index.array : new Uint16Array(vertices.length / 3).map((_, i) => i);
 
-    if (vertices.length === 0 || indices.length === 0) return;
-
-    const numTriangles = Math.floor(indices.length / 3);
-    if (vertices.length / 3 > 25000) {
-        console.warn(`SoftBody Error: Mesh is too complex. Aborting.`);
-        return;
+    // --- Build a low-poly physics proxy ---
+    // CreateFromTriMesh allocates O(n²) constraint memory; 500k+ verts → OOM.
+    // Decimate to ≤ MAX_PHYSICS_VERTS for simulation; the full render mesh is
+    // mapped back to the nearest soft-body node every frame for visuals.
+    const MAX_PHYSICS_VERTS = 1200;
+    let physicsGeometry = geometry.clone();
+    for (const attrName of Object.keys(physicsGeometry.attributes)) {
+        if (attrName !== 'position') physicsGeometry.deleteAttribute(attrName);
     }
+    physicsGeometry = BufferGeometryUtils.mergeVertices(physicsGeometry, 1e-4);
+    if (physicsGeometry.attributes.position.count > MAX_PHYSICS_VERTS) {
+        try {
+            const modifier = new SimplifyModifier();
+            physicsGeometry = modifier.modify(
+                physicsGeometry,
+                physicsGeometry.attributes.position.count - MAX_PHYSICS_VERTS
+            );
+        } catch (e) {
+            console.warn('SimplifyModifier failed, using merged-only proxy:', e);
+        }
+    }
+    console.log(`SoftBody proxy: ${physicsGeometry.attributes.position.count} verts (render mesh: ${Math.round(vertices.length / 3)})`);
 
-    const vArray = Array.from(vertices);
-    const iArray = Array.from(indices);
+    const physVerts = physicsGeometry.attributes.position.array;
+    const physIdx   = physicsGeometry.index
+        ? physicsGeometry.index.array
+        : new Uint16Array(physVerts.length / 3).map((_, i) => i);
+
+    if (physVerts.length === 0 || physIdx.length === 0) return;
+
+    const numTriangles = Math.floor(physIdx.length / 3);
+    const vArray = Array.from(physVerts);
+    const iArray = Array.from(physIdx);
 
     const triMeshSoftBody = softBodyHelpers.CreateFromTriMesh(
         physicsWorld.getWorldInfo(), vArray, iArray, numTriangles, true
@@ -808,23 +838,26 @@ function createSoftBodyFromGeometry(sbConfig, shapeNode, colorArray) {
     const sbCfg = triMeshSoftBody.get_m_cfg();
     sbCfg.set_viterations(10);
     sbCfg.set_piterations(10);
-    sbCfg.set_kDF(0.5); // Friction
-    sbCfg.set_kDP(0.01); // Very low damping allows bouncy jiggly movement
-    sbCfg.set_kPR(15);  // Internal pressure holds its shape out like a balloon
-
-    // Enable BOTH soft-rigid (SDF_RS = 0x01) and soft-soft cluster (CL_SS = 0x10) collision.
-    // CreateFromTriMesh defaults to the cluster pipeline; without explicitly enabling SDF_RS the
-    // volume body never runs node-vs-rigid-body collision tests, so rigid bodies pass right through.
+    sbCfg.set_kDF(0.5);   // Dynamic friction
+    sbCfg.set_kDP(0.005); // Very low damping — preserves bounce and jiggle
+    // kPR (pressure) only works for sealed balloon volumes; a humanoid skin has
+    // open seams so it either does nothing or explodes the body. kMT (pose-matching)
+    // is the correct parameter: it gives nodes a memory of their rest shape so the
+    // body jiggles back like a jelly mould after being deformed.
+    sbCfg.set_kMT(0.3);
+    // SDF_RS (0x01) = soft vs rigid collision via SDF.
+    // CL_SS  (0x10) = cluster vs cluster soft-soft collision.
     sbCfg.set_collisions(0x11);
 
     const sbMat = triMeshSoftBody.get_m_materials().at(0);
-    sbMat.set_m_kLST(0.2); // Low stiffness gives it the soft elasticity
-    sbMat.set_m_kAST(0.2);
-    sbMat.set_m_kVST(0.2);
+    sbMat.set_m_kLST(0.2); // Linear stiffness  — low = soft/elastic
+    sbMat.set_m_kAST(0.2); // Angular stiffness
+    sbMat.set_m_kVST(0.2); // Volume stiffness
 
     triMeshSoftBody.setTotalMass(mass, false);
     triMeshSoftBody.generateBendingConstraints(2, sbMat);
-    triMeshSoftBody.setPose(false, true); // Extremely important so it remembers its humanoid rest-state
+    // NOTE: setPose is not bound in this Ammo.js build — shape memory is provided
+    // by kMT (pose-matching stiffness) together with the per-frame driving loop.
 
     Ammo.castObject(triMeshSoftBody, Ammo.btCollisionObject).getCollisionShape().setMargin(margin);
     physicsWorld.addSoftBody(triMeshSoftBody, 1, -1);
@@ -847,6 +880,19 @@ function createSoftBodyFromGeometry(sbConfig, shapeNode, colorArray) {
     mesh.userData.physicsBody = triMeshSoftBody;
     mesh.userData.isGenericSoft = true;
     mesh.userData.mapping = mapping;
+
+    if (isHumanoid) {
+        mesh.userData.isAnimatedJelly = true;
+        mesh.userData.skinnedMesh = shapeNode._skinnedMesh;
+        // reverseMapping[nodeIndex] = a representative render-vertex index.
+        // Used by the COM-relative driving loop to CPU-skin each node's
+        // animated target position from the hidden SkinnedMesh.
+        const reverseMapping = new Int32Array(nodes.size()).fill(-1);
+        for (let i = 0; i < mapping.length; i++) {
+            if (reverseMapping[mapping[i]] === -1) reverseMapping[mapping[i]] = i;
+        }
+        mesh.userData.reverseMapping = reverseMapping;
+    }
 
     const def = sbConfig["@DEF"];
     if (def) parsedBodiesMap[def] = { mesh, body: triMeshSoftBody, isSoft: true };
@@ -1146,6 +1192,102 @@ function animate() {
     });
 
     if (globalHinge) globalHinge.enableAngularMotor(true, 0.8 * armMovement, 50);
+
+    // --- COM-relative animated-jelly pose driving ---
+    //
+    // THE PROBLEM with driving absolute world positions (blendFactor * (animTarget - nodePos)):
+    //   Gravity adds ~0.16 m/s downward per frame. Even blendFactor=0.5 corrects
+    //   0.5 * distance upward — for a node only 3 cm below its target that is
+    //   0.015 m/s, already comparable to gravity. At blendFactor=6 used previously,
+    //   the spring completely overwhelms gravity and Gramps is pinned in place.
+    //
+    // THE FIX — decouple global translation from pose animation:
+    //   1. Compute the physics body's current center-of-mass (physicsCOM).
+    //   2. Compute the animated center-of-mass (animCOM) from the skeleton.
+    //   3. For each node, the spring target is:
+    //        physicsCOM + (animatedNodePos - animCOM)
+    //      i.e. the animated *offset from COM*, applied to wherever physics
+    //      has moved the body.
+    //   4. Apply a gentle spring impulse toward that relative target.
+    //
+    // Result: gravity and collisions move the whole body freely (physicsCOM falls
+    // under gravity, bounces off objects). The spring only shapes the limbs around
+    // that freely-moving centre — Gramps animates while truly obeying physics.
+
+    softBodies.forEach(mesh => {
+        if (!mesh.userData.isAnimatedJelly) return;
+
+        const softBody    = mesh.userData.physicsBody;
+        const nodes       = softBody.get_m_nodes();
+        const nodeCount   = nodes.size();
+        const skinnedMesh = mesh.userData.skinnedMesh;
+        const revMap      = mesh.userData.reverseMapping;
+        const skeleton    = skinnedMesh.skeleton;
+        const geo         = skinnedMesh.geometry;
+        const posAttr     = geo.attributes.position;
+        const skinIdx     = geo.attributes.skinIndex;
+        const skinWt      = geo.attributes.skinWeight;
+
+        // Gentle pose-shape spring — strong enough to keep limbs recognisable,
+        // weak enough that gravity (9.8 m/s²) easily moves the whole body.
+        const poseFactor = 2.5;
+
+        // Pre-compute per-bone skinning matrices (boneWorld × boneInverse) once per frame.
+        const boneMats = skeleton.bones.map((bone, bi) =>
+            _jellyMat.clone().multiplyMatrices(bone.matrixWorld, skeleton.boneInverses[bi])
+        );
+
+        // --- Step 1: compute animated targets for every node and their COM ---
+        const animTargets = [];
+        _animCOM.set(0, 0, 0);
+        for (let ni = 0; ni < nodeCount; ni++) {
+            const vi = revMap[ni];
+            _jellyTarget.set(0, 0, 0);
+            if (vi !== -1) {
+                const bx = posAttr.getX(vi), by = posAttr.getY(vi), bz = posAttr.getZ(vi);
+                for (let j = 0; j < 4; j++) {
+                    const w = skinWt.getComponent(vi, j);
+                    if (w === 0) continue;
+                    _jellyVec.set(bx, by, bz).applyMatrix4(boneMats[skinIdx.getComponent(vi, j)]);
+                    _jellyTarget.addScaledVector(_jellyVec, w);
+                }
+                // Bring into world space via the hidden SkinnedMesh's matrixWorld.
+                _jellyTarget.applyMatrix4(skinnedMesh.matrixWorld);
+            }
+            animTargets.push(_jellyTarget.clone());
+            _animCOM.add(_jellyTarget);
+        }
+        _animCOM.divideScalar(nodeCount);
+
+        // --- Step 2: compute physics body's current center-of-mass ---
+        _physicsCOM.set(0, 0, 0);
+        for (let ni = 0; ni < nodeCount; ni++) {
+            const p = nodes.at(ni).get_m_x();
+            _physicsCOM.x += p.x();
+            _physicsCOM.y += p.y();
+            _physicsCOM.z += p.z();
+        }
+        _physicsCOM.divideScalar(nodeCount);
+
+        // --- Step 3: apply COM-relative spring impulse to each node ---
+        // Target = physicsCOM + (animatedOffset from animCOM).
+        // This corrects limb shape around wherever gravity has moved the body.
+        for (let ni = 0; ni < nodeCount; ni++) {
+            const animOffset = animTargets[ni].sub(_animCOM); // offset in animated space
+            const tx = _physicsCOM.x + animOffset.x;
+            const ty = _physicsCOM.y + animOffset.y;
+            const tz = _physicsCOM.z + animOffset.z;
+
+            const node = nodes.at(ni);
+            const pos  = node.get_m_x();
+            const vel  = node.get_m_v();
+            vel.setValue(
+                vel.x() + (tx - pos.x()) * poseFactor,
+                vel.y() + (ty - pos.y()) * poseFactor,
+                vel.z() + (tz - pos.z()) * poseFactor
+            );
+        }
+    });
 
     physicsWorld.stepSimulation(deltaTime, 10);
 
