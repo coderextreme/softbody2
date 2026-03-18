@@ -1,47 +1,88 @@
 import * as THREE from 'three';
 import { WebGPURenderer } from 'three/webgpu';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-// import WebGPU from 'three/addons/capabilities/WebGPU.js';
 import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
 import { FontLoader } from 'three/addons/loaders/FontLoader.js';
+import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 
 let physicsWorld, scene, camera, renderer, controls;
 let timer = new THREE.Timer();
 let rigidBodies = [];
 let softBodies = [];
 let parsedBodiesMap = {};
-const mixers = []; // Allows for processing any dynamically loaded HAnim mixers
+const mixers = [];
 let globalHinge = null;
 let armMovement = 0;
 const margin = 0.05;
 
 let transformAux1;
+let kinematicBones = [];
+let hiddenSkinnedMeshes = []; // Keep track of hidden meshes to manually force their matrix updates
 
-// X3D FontStyle.family → typeface JSON file mapping
-const fontMap = {
-  'SERIF':      'https://threejs.org/examples/fonts/gentilis_regular.typeface.json',
-  'SANS':       'https://threejs.org/examples/fonts/helvetiker_regular.typeface.json',
-  'TYPEWRITER': 'https://threejs.org/examples/fonts/droid/droid_sans_mono_regular.typeface.json',
-};
+// --- X3D IMPORT/EXPORT & DEF/USE Registries ---
+const globalDefMap = {};
+const inlineExportsMap = {};
 
-// X3D FontStyle.style → font variant file suffix
-const styleMap = {
-  'PLAIN':      'regular',
-  'BOLD':       'bold',
-  'ITALIC':     'italic',
-  'BOLDITALIC': 'bold', // Three.js fonts don't always have bold+italic
-};
+function scanForDefs(node) {
+    if (!node || typeof node !== 'object') return;
 
-// Ensure the page is fully parsed before executing
+    const defName = node["@DEF"] || node["DEF"];
+    if (defName) {
+        globalDefMap[defName] = node;
+    }
+
+    for (const key in node) {
+        if (Array.isArray(node[key])) {
+            node[key].forEach(child => scanForDefs(child));
+        } else if (typeof node[key] === 'object') {
+            scanForDefs(node[key]);
+        }
+    }
+}
+
+function scanForExports(node, results = []) {
+    if (!node || typeof node !== 'object') return results;
+
+    if (node.EXPORT) {
+        results.push(node.EXPORT);
+    }
+
+    for (const key in node) {
+        if (key === 'EXPORT') {
+            if (Array.isArray(node[key])) results.push(...node[key]);
+            else results.push(node[key]);
+        } else if (Array.isArray(node[key])) {
+            node[key].forEach(child => scanForExports(child, results));
+        } else if (typeof node[key] === 'object') {
+            scanForExports(node[key], results);
+        }
+    }
+    return results;
+}
+
+function resolveUSE(node) {
+    if (!node) return null;
+    if (typeof node === 'object' && !Array.isArray(node)) {
+        const useName = node["@USE"] || node["USE"];
+        if (useName) {
+            const resolved = globalDefMap[useName];
+            if (resolved) {
+                return resolveUSE(resolved);
+            }
+            console.warn(`USE node not found in registry: ${useName}`);
+            return null;
+        }
+    }
+    return node;
+}
+// ----------------------------------------------
+
 window.addEventListener('load', () => {
-
     if (typeof Ammo === 'undefined') {
-        document.getElementById('container').innerHTML = "<br><br><br><b>Error:</b> Ammo.js failed to load from the CDN. Please check your network/adblocker.";
-        console.error("Ammo.js is undefined. The CDN script tag failed to execute.");
+        document.getElementById('container').innerHTML = "<br><br><br><b>Error:</b> Ammo.js failed to load.";
         return;
     }
 
-    // Initialize Ammo.js
     Ammo().then(async (AmmoLib) => {
         window.Ammo = AmmoLib;
         transformAux1 = new Ammo.btTransform();
@@ -50,7 +91,6 @@ window.addEventListener('load', () => {
         initPhysics();
         initInput();
 
-        // Fetch X3D JSON and parse it
         fetch('scene.json')
             .then(response => {
                 if (!response.ok) throw new Error("Could not load scene.json");
@@ -66,23 +106,19 @@ window.addEventListener('load', () => {
 
 async function initGraphics() {
     const container = document.getElementById('container');
-    container.innerHTML = ""; // Clear loading messages
+    container.innerHTML = "";
 
-    // Provide default camera; will be updated by Viewpoint in X3D
     camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.2, 2000);
-
     scene = new THREE.Scene();
 
-    // renderer = new THREE.WebGPURenderer({ antialias: true });
     renderer = new WebGPURenderer({ antialias: true });
-    await renderer.init(); // WebGPURenderer requires async init!
+    await renderer.init();
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.shadowMap.enabled = true;
     container.appendChild(renderer.domElement);
 
     controls = new OrbitControls(camera, renderer.domElement);
-
     window.addEventListener('resize', onWindowResize, false);
 }
 
@@ -96,278 +132,223 @@ function initPhysics() {
     physicsWorld = new Ammo.btSoftRigidDynamicsWorld(dispatcher, broadphase, solver, collisionConfiguration, softBodySolver);
 }
 
-async function parseSceneJSON(sceneData) {
+async function parseSceneJSON(sceneData, parentGroup = scene) {
+    scanForDefs(sceneData);
     const children = sceneData["-children"];
 
     if (children) {
-        children.forEach(async (child) => {
+        for (const child of children) {
             if (child.Background)           parseBackground(child.Background);
             if (child.Viewpoint)            parseViewpoint(child.Viewpoint);
             if (child.EnvironmentLight)     parseEnvironmentLight(child.EnvironmentLight);
             if (child.DirectionalLight)     parseDirectionalLight(child.DirectionalLight);
             if (child.PointLight)           parsePointLight(child.PointLight);
             if (child.SpotLight)            parseSpotLight(child.SpotLight);
-            if (child.Transform)            await parseTransform(child.Transform, scene);
+            if (child.Transform)            await parseTransform(child.Transform, parentGroup);
+            if (child.Inline)               await processInline(child.Inline, parentGroup);
+            if (child.IMPORT)               processImport(child.IMPORT);
             if (child.RigidBodyCollection)  parseRigidBodyCollection(child.RigidBodyCollection);
-        });
+        }
     } else if (sceneData.RigidBodyCollection) {
-        // Fallback for previous structure
         parseRigidBodyCollection(sceneData.RigidBodyCollection);
     }
 }
 
-// ---------------------------------------------------------------------------
-// X3D Transform
-//
-// The full X3D Transform matrix is:
-//   M = T(translation) * T(center) * R(rotation) * S(scale) * T(-center)
-//
-// Fields:
-//   @translation  [x y z]          default [0 0 0]
-//   @center       [x y z]          default [0 0 0]  (pivot for rotation/scale)
-//   @rotation     [ax ay az angle] default [0 0 1 0]
-//   @scale        [x y z]          default [1 1 1]
-//   -children     array of child nodes
-// ---------------------------------------------------------------------------
-
-/**
- * Compose the X3D transform onto a THREE.Group using matrix math so that
- * all five fields interact correctly (center offset is applied and removed).
- */
 function applyX3DTransform(group, tfData) {
     const t = tfData["@translation"] || [0, 0, 0];
     const c = tfData["@center"]      || [0, 0, 0];
     const r = tfData["@rotation"]    || [0, 0, 1, 0];
     const s = tfData["@scale"]       || [1, 1, 1];
 
-    // Build each component matrix
     const T  = new THREE.Matrix4().makeTranslation(t[0], t[1], t[2]);
     const Tc = new THREE.Matrix4().makeTranslation( c[0],  c[1],  c[2]);
     const Tn = new THREE.Matrix4().makeTranslation(-c[0], -c[1], -c[2]);
-    const R  = new THREE.Matrix4().makeRotationAxis(
-                   new THREE.Vector3(r[0], r[1], r[2]).normalize(), r[3]);
+    const R  = new THREE.Matrix4().makeRotationAxis(new THREE.Vector3(r[0], r[1], r[2]).normalize(), r[3]);
     const S  = new THREE.Matrix4().makeScale(s[0], s[1], s[2]);
 
-    // M = T * Tc * R * S * Tn
     const M = new THREE.Matrix4();
     M.multiply(T).multiply(Tc).multiply(R).multiply(S).multiply(Tn);
-
     group.applyMatrix4(M);
 }
 
-/**
- * Parse a single X3D Shape node and add the resulting mesh(es) to parentGroup.
- * Handles async Text geometry transparently.
- */
-function parseShapeNode(shapeData, parentGroup) {
-    if (!shapeData) return;
-
-    const geomNode = shapeData["-geometry"];
-    const appNode  = shapeData["-appearance"]?.Appearance;
-    const matData  = appNode?.["-material"]?.Material;
-
-    const diffuse  = matData?.["@diffuseColor"]  || [1, 1, 1];
-    const emissive = matData?.["@emissiveColor"]  || [0, 0, 0];
-    const opacity  = matData?.["@transparency"] !== undefined
-                     ? 1.0 - matData["@transparency"] : 1.0;
-
-    const material = new THREE.MeshPhongMaterial({
-        color:       new THREE.Color(...diffuse),
-        emissive:    new THREE.Color(...emissive),
-        transparent: opacity < 1.0,
-        opacity,
-        side: THREE.DoubleSide,
-    });
-
-    /** Actually attach geometry (or a Group of meshes) to parentGroup */
-    const attach = (geo) => {
-        if (!geo) return;
-        if (geo instanceof THREE.Group) {
-            // createTextGeometry can return a Group for multi-line text
-            geo.traverse(child => {
-                if (child.isMesh) {
-                    child.material     = material.clone();
-                    child.castShadow   = true;
-                    child.receiveShadow = true;
-                }
-            });
-            parentGroup.add(geo);
-        } else {
-            const mesh = new THREE.Mesh(geo, material);
-            mesh.castShadow    = true;
-            mesh.receiveShadow = true;
-            parentGroup.add(mesh);
-        }
-    };
-
-    const result = parseX3DGeometry(geomNode);
-
-    if (result instanceof Promise) {
-        result.then(attach).catch(err => console.warn("Shape geometry error:", err));
-    } else {
-        attach(result);
+function triangulateFaceSet(indices) {
+    if (!indices.includes(-1)) {
+        return Array.from(indices);
     }
+
+    const tris = [];
+    let face = [];
+    for (let i = 0; i < indices.length; i++) {
+        if (indices[i] === -1) {
+            for (let j = 1; j < face.length - 1; j++) {
+                tris.push(face[0], face[j], face[j+1]);
+            }
+            face = [];
+        } else {
+            face.push(indices[i]);
+        }
+    }
+    if (face.length >= 3) {
+        for (let j = 1; j < face.length - 1; j++) {
+            tris.push(face[0], face[j], face[j+1]);
+        }
+    }
+    return tris;
 }
 
-/**
- * Loads a skinned X3D JSON format character into a THREE.js Scene
- * @param {THREE.Scene} scene - The THREE.js scene to add the mesh to
- * @returns {Promise<{ mesh: THREE.SkinnedMesh, mixer: THREE.AnimationMixer }>}
- */
 export async function loadX3DHumanoid(json, scene, parentGroup) {
-    const x3dScene = json.X3D['-Scene'];
+    const x3dScene = json.X3D['-Scene'] || json.X3D.Scene;
+    if (!x3dScene) return null;
+
     const childrenNodes = x3dScene['-children'] || [];
-    
-    let humanoidNode = null;
-    let timeSensor = null;
+    let humanoidNode = null, timeSensor = null;
     const interpolators = [];
-    
+
     for (const child of childrenNodes) {
         if (child.HAnimHumanoid) humanoidNode = child.HAnimHumanoid;
         if (child.TimeSensor) timeSensor = child.TimeSensor;
         if (child.PositionInterpolator || child.OrientationInterpolator) interpolators.push(child);
     }
+    if (!humanoidNode) return null;
 
-    if (!humanoidNode) throw new Error("No HAnimHumanoid found in X3D JSON");
+    const skinNode = resolveUSE(humanoidNode['-skin'][0].Shape);
+    const geoNode = resolveUSE(skinNode['-geometry']);
+    const rawGeo = geoNode.TriangleSet || geoNode.IndexedTriangleSet || geoNode.IndexedFaceSet;
 
-    // 1. Parse Geometry
-    const skinNode = humanoidNode['-skin'][0].Shape;
-    const geoNode = skinNode['-geometry'].TriangleSet || skinNode['-geometry'].IndexedTriangleSet;
-    
-    const positions = geoNode['-coord'].Coordinate['@point'];
-    const uvs = geoNode['-texCoord'] ? geoNode['-texCoord'].TextureCoordinate['@point'] : null;
-    const colors = geoNode['-color'] ? geoNode['-color'].Color['@color'] : null;
+    const coordNode = resolveUSE(rawGeo['-coord']?.Coordinate || rawGeo.Coordinate);
+    const positions = coordNode['@point'];
+    const uvs = rawGeo['-texCoord'] ? resolveUSE(rawGeo['-texCoord'].TextureCoordinate)['@point'] : null;
+    const colors = rawGeo['-color'] ? resolveUSE(rawGeo['-color'].Color)['@color'] : null;
 
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     if (uvs) geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
-    
+
+    if (rawGeo['@coordIndex']) {
+        geometry.setIndex(triangulateFaceSet(rawGeo['@coordIndex']));
+    } else if (rawGeo['@index']) {
+        geometry.setIndex(rawGeo['@index']);
+    }
+
     geometry.computeVertexNormals();
 
-    // 2. Parse Material & Textures
-    const appearance = skinNode['-appearance'].Appearance;
-    const textureNode = appearance['-texture'];
+    const appearance = resolveUSE(skinNode['-appearance']?.Appearance);
+    const textureNode = resolveUSE(appearance?.['-texture']);
     let material;
-    
+
     if (textureNode && textureNode.ImageTexture) {
         const textureUrl = textureNode.ImageTexture['@url'][0];
-        let basePath = "http://localhost:5173/";
-	if (textureUrl.startsWith("data:")) {
-	    basePath = "";
-	} else {
-	    basePath = window.location.href;
-	}
+        let basePath = textureUrl.startsWith("data:") ? "" : window.location.href.split('/').slice(0,-1).join('/') + '/';
         const diffuseMap = new THREE.TextureLoader().load(basePath + textureUrl);
         diffuseMap.colorSpace = THREE.SRGBColorSpace;
-        diffuseMap.flipY = false; // Python pre-inverts for WebGL mapping
-        
+        diffuseMap.flipY = false;
         material = new THREE.MeshStandardMaterial({ map: diffuseMap, vertexColors: !!colors });
     } else {
     	if (colors) geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
         material = new THREE.MeshStandardMaterial({ vertexColors: !!colors });
     }
 
-    // 3. Parse Skeleton & Weights
-    const skeletonNodes = humanoidNode['-skeleton'];
-    const bones = [];
-    const boneMap = {};
-    
+    const skeletonNodes = humanoidNode['-skeleton'] || [];
+    const bones = [], boneMap = {};
     const vertexCount = positions.length / 3;
-    const skinIndices = new Array(vertexCount * 4).fill(0);
-    const skinWeights = new Array(vertexCount * 4).fill(0);
+    const skinIndices = new Array(vertexCount * 4).fill(0), skinWeights = new Array(vertexCount * 4).fill(0);
     const weightCounts = new Array(vertexCount).fill(0);
-    
-    let boneIndex = 0;
 
-    function parseJoint(jointObj, parentBone, parentGroup) {
+    let boneIndex = 0;
+    function parseJoint(jointObj, parentBone, pivotParent) {
         const joint = jointObj.HAnimJoint;
-        const pivot = new THREE.Group();
-        const bone = new THREE.Bone();
-        bone.name = joint['@name'];
+        const pivot = new THREE.Group(), bone = new THREE.Bone();
+        bone.name = joint['@name'] || joint['@DEF'];
         applyX3DTransform(pivot, joint);
-	if (parentGroup) {
-		parentGroup.add(pivot);
-		scene.add(parentGroup);
-	}
-        
+        if (pivotParent) { pivotParent.add(pivot); scene.add(pivotParent); }
+
         if (joint['@translation']) bone.position.fromArray(joint['@translation']);
         if (joint['@center']) bone.position.fromArray(joint['@center']);
         if (joint['@rotation']) {
             const [x, y, z, angle] = joint['@rotation'];
-            bone.quaternion.setFromAxisAngle(new THREE.Vector3(x, y, z), angle); // Axis-Angle to Quat
+            bone.quaternion.setFromAxisAngle(new THREE.Vector3(x, y, z), angle);
         }
         if (joint['@scale']) bone.scale.fromArray(joint['@scale']);
-        
+
         bones.push(bone);
         boneMap[joint['@DEF'] || bone.name] = bone;
         if (parentBone) parentBone.add(bone);
-        
-        // Reverse skin indexing mapped back to vertices
-        const indices = joint['@skinCoordIndex'] || [];
-        const weights = joint['@skinCoordWeight'] || [];
-        
+
+        const indices = joint['@skinCoordIndex'] || [], weights = joint['@skinCoordWeight'] || [];
         for (let i = 0; i < indices.length; i++) {
-            const vIdx = indices[i];
-            const w = weights[i];
-            const wc = weightCounts[vIdx];
+            const vIdx = indices[i], w = weights[i], wc = weightCounts[vIdx];
             if (wc < 4) {
                 skinIndices[vIdx * 4 + wc] = boneIndex;
                 skinWeights[vIdx * 4 + wc] = w;
                 weightCounts[vIdx] += 1;
             }
         }
-        
         boneIndex++;
-        const children = joint['-children'] || [];
-        children.forEach(c => { if (c.HAnimJoint) parseJoint(c, bone, pivot); });
+        (joint['-children'] || []).forEach(c => { if (c.HAnimJoint) parseJoint(c, bone, pivot); });
         return bone;
     }
 
-    const rootBones = [];
-    for (const rootNode of skeletonNodes) {
-        rootBones.push(parseJoint(rootNode, null, null));
-    }
-
+    const rootBones = skeletonNodes.map(rootNode => parseJoint(rootNode, null, null));
     geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(skinIndices, 4));
     geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute(skinWeights, 4));
 
+    const skeleton = new THREE.Skeleton(bones);
     const mesh = new THREE.SkinnedMesh(geometry, material);
     rootBones.forEach(b => mesh.add(b));
-    
-    const skeleton = new THREE.Skeleton(bones);
-    mesh.bind(skeleton);
-    scene.add(mesh);
 
-    // 4. Parse Animation Routing
+    // Apply the HAnimHumanoid's own transform (scale, translation, rotation) to the mesh.
+    // This is the scale the user specifies on the HAnimHumanoid node (e.g. @scale [0.025,0.025,0.025]).
+    // We apply it here so that bone positions are consistent with the geometry in object space.
+    if (humanoidNode['@scale']) mesh.scale.fromArray(humanoidNode['@scale']);
+    if (humanoidNode['@translation']) mesh.position.fromArray(humanoidNode['@translation']);
+    if (humanoidNode['@rotation']) {
+        const [rx, ry, rz, ra] = humanoidNode['@rotation'];
+        mesh.quaternion.setFromAxisAngle(new THREE.Vector3(rx, ry, rz).normalize(), ra);
+    }
+
+    // Do NOT bind here — the caller (processInline) must parent the mesh into the scene
+    // graph first so that updateWorldMatrix() captures the full parent-chain transform
+    // (including any ancestor scale from the wrapping Transform node).  Binding early
+    // would record identity as the bind matrix, causing parent scale to be applied
+    // twice during skinning and producing the wrong visual size.
+    mesh.userData.pendingSkeleton = skeleton;
+
+    // Save these references so the SoftBody can steal the UV'd geometry and animate properly!
+    skinNode._skinnedMesh = mesh;
+    skinNode._geometry = geometry;
+
+    // mesh is NOT added to the scene here — processInline handles parenting.
+
     const duration = timeSensor ? (timeSensor['@cycleInterval'] || 1) : 1;
     const tracks = [];
-    const routes = x3dScene['-ROUTE'] || [];
+
+    // Normalize routes into a flat array of plain ROUTE objects.
+    // X3D JSON can store them two ways:
+    //   1. x3dScene['-ROUTE'] — array of bare objects { "@fromNode": ..., "@toNode": ... }
+    //   2. x3dScene['-children'] items — objects like { "ROUTE": { "@fromNode": ..., "@toNode": ... } }
+    const rawRoutes = [
+        ...(x3dScene['-ROUTE'] || []),
+        ...(x3dScene['-children'] || []).filter(c => c.ROUTE).map(c => c.ROUTE),
+    ];
+    // If an entry still has a .ROUTE wrapper (format 2 ended up in '-ROUTE'), unwrap it.
+    const routes = rawRoutes.map(r => (r['@fromNode'] !== undefined ? r : (r.ROUTE || r)));
 
     for (const interpObj of interpolators) {
         const type = interpObj.PositionInterpolator ? 'PositionInterpolator' : 'OrientationInterpolator';
         const interp = interpObj[type];
-        const def = interp['@DEF'];
-        
-        // Follow X3D route to bone target
-        const route = routes.find(r => r.ROUTE && r.ROUTE['@fromNode'] === def && r.ROUTE['@fromField'] === 'value_changed');
+        const route = routes.find(r => r['@fromNode'] === interp['@DEF'] && r['@fromField'] === 'value_changed');
         if (!route) continue;
 
-        const targetBone = boneMap[route.ROUTE['@toNode']];
+        const targetBone = boneMap[route['@toNode']];
         if (!targetBone) continue;
 
         const times = interp['@key'].map(k => k * duration);
-        
         if (type === 'PositionInterpolator') {
             tracks.push(new THREE.VectorKeyframeTrack(`${targetBone.name}.position`, times, interp['@keyValue']));
         } else {
-            const aaValues = interp['@keyValue'];
-            const quatValues = [];
-            // Re-convert Axis-Angle array stream back to Quaternions per frame
+            const aaValues = interp['@keyValue'], quatValues = [];
             for(let i = 0; i < aaValues.length; i += 4) {
-                const q = new THREE.Quaternion().setFromAxisAngle(
-                    new THREE.Vector3(aaValues[i], aaValues[i+1], aaValues[i+2]), 
-                    aaValues[i+3]
-                );
+                const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(aaValues[i], aaValues[i+1], aaValues[i+2]), aaValues[i+3]);
                 quatValues.push(q.x, q.y, q.z, q.w);
             }
             tracks.push(new THREE.QuaternionKeyframeTrack(`${targetBone.name}.quaternion`, times, quatValues));
@@ -375,31 +356,86 @@ export async function loadX3DHumanoid(json, scene, parentGroup) {
     }
 
     let mixer = null;
-    let animationAction = null;
     if (tracks.length > 0) {
-        const clip = new THREE.AnimationClip('X3D_Action', duration, tracks);
         mixer = new THREE.AnimationMixer(mesh);
-        animationAction = mixer.clipAction(clip);
-        animationAction.play();
+        mixer.clipAction(new THREE.AnimationClip('X3D_Action', duration, tracks)).play();
     }
-
     return { mesh, mixer };
 }
 
-/**
- * Recursively walk an array of X3D child nodes, dispatching each to the
- * appropriate parser and attaching results to parentGroup.
- *
- * Supported node types inside a Transform:
- *   Shape, Transform, Group (treated as Transform with no fields),
- *   DirectionalLight, PointLight, SpotLight
- */
+async function processInline(inlineNode, parentGroup) {
+    const urlArray = inlineNode['@url'];
+    if (!urlArray || urlArray.length === 0) return;
+    const url = urlArray[0];
+    const inlineDef = inlineNode['@DEF'] || inlineNode['DEF'];
+
+    const g = new THREE.Group();
+    parentGroup.add(g);
+
+    try {
+        let inlineJson;
+        try {
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            inlineJson = await response.json();
+        } catch (fetchErr) {
+            console.warn(`Fetch failed for Inline ${url}, attempting dynamic import...`, fetchErr.message);
+            const cleanUrl = url.startsWith('src/') ? url.substring(4) : url;
+            const module = await import(/* @vite-ignore */ `./${cleanUrl}`);
+            inlineJson = module.default || module;
+        }
+
+        scanForDefs(inlineJson);
+
+        const localExports = scanForExports(inlineJson);
+        if (inlineDef) {
+            inlineExportsMap[inlineDef] = {};
+            for (const exp of localExports) {
+                const localName = exp["@localDEF"] || exp["localDEF"];
+                const asName = exp["@AS"] || exp["AS"] || localName;
+                if (globalDefMap[localName]) inlineExportsMap[inlineDef][asName] = globalDefMap[localName];
+            }
+        }
+
+        if (inlineJson.X3D?.Scene) await parseSceneJSON(inlineJson.X3D.Scene, g);
+
+        const humanoidResult = await loadX3DHumanoid(inlineJson, scene, g);
+        if (humanoidResult) {
+            if (humanoidResult.mesh) {
+                humanoidResult.mesh.frustumCulled = false;
+                g.add(humanoidResult.mesh);
+
+                // Now that the mesh is inside the scene graph (and inherits any ancestor scale
+                // from the wrapping Transform node), update all world matrices and THEN bind the
+                // skeleton.  This ensures bindMatrix and the per-bone inverses are computed with
+                // the full parent-chain transform so the skinning shader applies the scale exactly
+                // once instead of doubling it.
+                humanoidResult.mesh.updateWorldMatrix(true, true);
+                humanoidResult.mesh.bind(humanoidResult.mesh.userData.pendingSkeleton);
+            }
+            if (humanoidResult.mixer) mixers.push(humanoidResult.mixer);
+        }
+    } catch (err) {
+        console.error(`Failed to load Inline scene from ${url}:`, err);
+    }
+}
+
+function processImport(importNode) {
+    const inlineDef = importNode["@inlineDEF"] || importNode["inlineDEF"];
+    const importedDef = importNode["@importedDEF"] || importNode["importedDEF"];
+    const asName = importNode["@AS"] || importNode["AS"] || importedDef;
+
+    if (inlineExportsMap[inlineDef] && inlineExportsMap[inlineDef][importedDef]) {
+        globalDefMap[asName] = inlineExportsMap[inlineDef][importedDef];
+    } else if (globalDefMap[importedDef]) {
+        globalDefMap[asName] = globalDefMap[importedDef];
+    }
+}
+
 async function parseTransformChildren(children, parentGroup) {
     if (!children) return;
-    children.forEach(async (child) => {
-        if (child.Shape) {
-            parseShapeNode(child.Shape, parentGroup);
-        }
+    for (const child of children) {
+        if (child.Shape) parseShapeNode(child.Shape, parentGroup);
         else if (child.Transform) {
             const g = new THREE.Group();
             applyX3DTransform(g, child.Transform);
@@ -411,94 +447,583 @@ async function parseTransformChildren(children, parentGroup) {
             parentGroup.add(g);
             await parseTransformChildren(child.Group["-children"], g);
         }
-        else if (child.DirectionalLight) { parseDirectionalLight(child.DirectionalLight); }
-        else if (child.PointLight)       { parsePointLight(child.PointLight); }
-        else if (child.SpotLight)        { parseSpotLight(child.SpotLight); }
-        else if (child.Inline) {
-            // Handle external scene fetching (Including Humanoids)
-            const urlArray = child.Inline['@url'];
-            if (urlArray && urlArray.length > 0) {
-              const url = urlArray[0];
-              const g = new THREE.Group();
-              parentGroup.add(g);
-
-              try {
-                let inlineJson;
-                try {
-                  // 1. Standard web loading (Expects url available from server, e.g. /public)
-                  const response = await fetch(url);
-                  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                  inlineJson = await response.json();
-               } catch (fetchErr) {
-                  // 2. Fallback to Dynamic Import (Useful if running in strict Vite local '/src' folders)
-                  console.warn(`Fetch failed for Inline ${url}, attempting dynamic import...`, fetchErr.message);
-                  const cleanUrl = url.startsWith('src/') ? url.substring(4) : url;
-                  const module = await import(/* @vite-ignore */ `./${cleanUrl}`);
-                  inlineJson = module.default || module;
-               }
-
-                // A) Parse standard X3D recursive nodes inside the dynamically loaded file.
-                // This injects any local TimeSensors & Routes directly into the global pool so they animate.
-                if (inlineJson.X3D?.Scene) {
-                  await parseSceneNode(inlineJson.X3D.Scene);
-               }
-
-                // B) Invoke specialized loader to resolve specific HAnim nodes
-                const humanoidResult = await loadX3DHumanoid(inlineJson, scene, g);
-                if (humanoidResult) {
-                  const { mesh, mixer } = humanoidResult;
-                  if (mesh) {
-                    mesh.frustumCulled = false;
-                    g.add(mesh);
-                 }
-                  if (mixer) {
-                    mixers.push(mixer);
-                 }
-               }
-
-          } catch (err) {
-            console.error(`Failed to load Inline scene from ${url}:`, err);
-          }
-        }
-
-      }
-   });
+        else if (child.DirectionalLight) parseDirectionalLight(child.DirectionalLight);
+        else if (child.PointLight)       parsePointLight(child.PointLight);
+        else if (child.SpotLight)        parseSpotLight(child.SpotLight);
+        else if (child.Inline)           await processInline(child.Inline, parentGroup);
+        else if (child.IMPORT)           processImport(child.IMPORT);
+    }
 }
 
-/**
- * Entry point: create a Group, apply the X3D transform, parse all children,
- * then attach to the given parent (typically `scene`).
- */
 async function parseTransform(tfData, parentGroup) {
     const group = new THREE.Group();
-
     applyX3DTransform(group, tfData);
     await parseTransformChildren(tfData["-children"], group);
-
     parentGroup.add(group);
     return group;
 }
 
+function parseShapeNode(originalShapeData, parentGroup) {
+    const shapeData = resolveUSE(originalShapeData);
+    if (!shapeData) return;
+
+    const geomNode = resolveUSE(shapeData["-geometry"]);
+    const appNode  = resolveUSE(shapeData["-appearance"]?.Appearance);
+    const matData  = resolveUSE(appNode?.["-material"]?.Material);
+
+    const diffuse  = matData?.["@diffuseColor"] || [1, 1, 1];
+    const opacity  = matData?.["@transparency"] !== undefined ? 1.0 - matData["@transparency"] : 1.0;
+
+    const material = new THREE.MeshPhongMaterial({
+        color: new THREE.Color(...diffuse),
+        transparent: opacity < 1.0, opacity, side: THREE.DoubleSide,
+    });
+
+    const attach = (geo) => {
+        if (!geo) return;
+        if (geo instanceof THREE.Group) {
+            geo.traverse(child => {
+                if (child.isMesh) { child.material = material.clone(); child.castShadow = true; }
+            });
+            parentGroup.add(geo);
+        } else {
+            const mesh = new THREE.Mesh(geo, material);
+            mesh.castShadow = true; mesh.receiveShadow = true;
+            parentGroup.add(mesh);
+        }
+    };
+
+    const result = parseX3DGeometry(geomNode);
+    if (result instanceof Promise) result.then(attach);
+    else attach(result);
+}
+
 function extractShapeNodes(geomArray) {
     if (!geomArray) return [];
-
-    const shapes = [];
-
-    const arr = Array.isArray(geomArray) ? geomArray : [geomArray];
+    const shapes = [], arr = Array.isArray(geomArray) ? geomArray : [geomArray];
 
     arr.forEach(entry => {
-        const cs = entry.CollidableShape;
+        const cs = resolveUSE(entry.CollidableShape) || entry.CollidableShape;
         if (!cs) return;
 
         const csList = Array.isArray(cs) ? cs : [cs];
-
         csList.forEach(c => {
-            const shape = c["-shape"]?.Shape;
+            const resolvedC = resolveUSE(c);
+            const shapeNodeRef = resolvedC["-shape"] || resolvedC.shape || resolvedC;
+            const shape = resolveUSE(shapeNodeRef.Shape || shapeNodeRef.shape);
             if (shape) shapes.push(shape);
         });
     });
-
     return shapes;
+}
+
+function parseX3DGeometry(originalGeomNode) {
+    const geomNode = resolveUSE(originalGeomNode);
+    if (!geomNode) return null;
+
+    if (geomNode.Box) return new THREE.BoxGeometry(...(geomNode.Box["@size"] || [1,1,1]));
+    if (geomNode.Sphere) return new THREE.SphereGeometry(geomNode.Sphere["@radius"] || 1, 32, 16);
+    if (geomNode.Cylinder) return new THREE.CylinderGeometry(geomNode.Cylinder["@radius"] || 1, geomNode.Cylinder["@radius"] || 1, geomNode.Cylinder["@height"] || 2, 32);
+
+    if (geomNode.IndexedFaceSet) {
+        const ifs = geomNode.IndexedFaceSet;
+        const coordNode = resolveUSE(ifs["-coord"]?.Coordinate || ifs.Coordinate);
+        const coords = coordNode?.["@point"] || [];
+        const indices = ifs["@coordIndex"] || [];
+
+        const geom = new THREE.BufferGeometry();
+        geom.setAttribute("position", new THREE.BufferAttribute(new Float32Array(coords), 3));
+        geom.setIndex(triangulateFaceSet(indices));
+        geom.computeVertexNormals();
+        return geom;
+    }
+
+    if (geomNode.ElevationGrid) {
+        const eg = geomNode.ElevationGrid;
+        const xDim = eg["@xDimension"], zDim = eg["@zDimension"];
+        const geom = new THREE.PlaneGeometry(xDim * (eg["@xSpacing"] || 1), zDim * (eg["@zSpacing"] || 1), xDim - 1, zDim - 1);
+        const heights = eg["@height"] || [], pos = geom.attributes.position;
+        for (let i = 0; i < heights.length; i++) pos.setY(i, heights[i]);
+        pos.needsUpdate = true;
+        geom.computeVertexNormals();
+        return geom;
+    }
+
+    if (geomNode.TriangleSet) {
+        const coordNode = resolveUSE(geomNode.TriangleSet["-coord"]?.Coordinate || geomNode.TriangleSet.Coordinate);
+        const pts = coordNode?.["@point"] || [];
+        let geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+        geo = BufferGeometryUtils.mergeVertices(geo);
+        geo.computeVertexNormals();
+        return geo;
+    }
+
+    if (geomNode.IndexedTriangleSet) {
+        const index = geomNode.IndexedTriangleSet["@index"] || [];
+        const coordNode = resolveUSE(geomNode.IndexedTriangleSet["-coord"]?.Coordinate || geomNode.IndexedTriangleSet.Coordinate);
+        const pts = coordNode?.["@point"] || [];
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+        if (index.length) geo.setIndex(index);
+        geo.computeVertexNormals();
+        return geo;
+    }
+
+    return null;
+}
+
+function parseRigidBodyCollection(collection) {
+    if (!collection) return;
+
+    const gravity = collection["@gravity"] || [0, -9.8, 0];
+    const gravVec = new Ammo.btVector3(gravity[0], gravity[1], gravity[2]);
+    physicsWorld.setGravity(gravVec);                    // affects rigid bodies
+    physicsWorld.getWorldInfo().set_m_gravity(gravVec);  // affects soft bodies (separate field in btSoftRigidDynamicsWorld)
+
+    if (collection["-bodies"]) {
+        collection["-bodies"].forEach(bodyNode => {
+            const rb = resolveUSE(bodyNode.RigidBody);
+            const sb = resolveUSE(bodyNode.SoftBody);
+
+            if (rb) {
+                const mass = rb["@mass"];
+                const pos = rb["@position"] || [0, 0, 0];
+                const ori = rb["@orientation"];
+                const def = rb["@DEF"];
+                const shapeNodes = extractShapeNodes(rb["-geometry"]);
+                if (!shapeNodes.length) return;
+                const appearance = resolveUSE(shapeNodes[0]?.["-appearance"]?.Appearance);
+                const color = resolveUSE(appearance?.["-material"]?.Material)?.["@diffuseColor"] || [1, 1, 1];
+
+                const scale = rb["@scale"];
+                createCompoundRigidBody(def, shapeNodes, mass, pos, color, ori, scale);
+            } else if (sb) {
+                const shapeNodes = extractShapeNodes(sb["-geometry"]);
+                if (!shapeNodes.length) return;
+
+                const shapeNode = resolveUSE(shapeNodes[0]);
+                const geomNode = resolveUSE(shapeNode["-geometry"]);
+                const appearance = resolveUSE(shapeNode?.["-appearance"]?.Appearance);
+                const col = resolveUSE(appearance?.["-material"]?.Material)?.["@diffuseColor"] || [0.8, 0.8, 0.8];
+
+                if (!geomNode && !shapeNode._skinnedMesh) return;
+
+                if (geomNode && geomNode.ElevationGrid) createSoftBodyCloth(sb, shapeNode, col);
+                else if (geomNode && geomNode.Sphere) createSoftBodySphere(sb, shapeNode, col);
+                else createSoftBodyFromGeometry(sb, shapeNode, col);
+            }
+        });
+    }
+
+    if (collection["-joints"]) {
+        collection["-joints"].forEach(jointNode => {
+            if (jointNode.SingleAxisHingeJoint) createHinge(jointNode.SingleAxisHingeJoint);
+            else if (jointNode.Stitch) createStitch(jointNode.Stitch);
+        });
+    }
+}
+
+function createCompoundRigidBody(def, shapeNodes, mass, pos, colorArray, ori, scale) {
+    const defaultMaterial = new THREE.MeshPhongMaterial({ color: new THREE.Color(...colorArray) });
+
+    const parent = new THREE.Object3D();
+    parent.position.set(pos[0], pos[1], pos[2]);
+    if (ori) {
+        const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(ori[0], ori[1], ori[2]).normalize(), ori[3]);
+        parent.quaternion.copy(q);
+    }
+    scene.add(parent);
+
+    const compound = new Ammo.btCompoundShape();
+    const localInertia = new Ammo.btVector3(0, 0, 0);
+
+    shapeNodes.forEach(shapeNode => {
+        if (shapeNode._skinnedMesh && shapeNode._geometry) {
+            // === Humanoid skin path ===
+            // Re-parent the already-animated SkinnedMesh (created by loadX3DHumanoid) onto
+            // the physics body's Object3D so it:
+            //   (a) moves/rotates with the rigid-body simulation, AND
+            //   (b) continues to play its bone animation via the existing AnimationMixer.
+            // Three.js parent.add() automatically detaches the mesh from processInline's group.
+            const skinnedMesh = shapeNode._skinnedMesh;
+            parent.updateMatrixWorld(true);
+            parent.add(skinnedMesh);
+            skinnedMesh.position.set(0, 0, 0); // physics parent drives world position
+            skinnedMesh.updateWorldMatrix(true, true);
+            // Rebind the skeleton under the new parent so bindMatrix (and the per-bone
+            // inverses) are recomputed from the correct world matrix.  Without this the
+            // skinning shader applies the old bind pose and the mesh deforms incorrectly.
+            skinnedMesh.bind(skinnedMesh.skeleton);
+            skinnedMesh.castShadow = true;
+            skinnedMesh.receiveShadow = true;
+            skinnedMesh.frustumCulled = false;
+
+            // Clone geometry purely for Bullet bounding-box / collision-shape computation;
+            // it is NOT used as a visible mesh.
+            const geom = shapeNode._geometry.clone();
+            if (scale) geom.scale(scale[0], scale[1], scale[2]);
+            geom.computeBoundingBox();
+            const bb = geom.boundingBox;
+            const sx = bb.max.x - bb.min.x, sy = bb.max.y - bb.min.y, sz = bb.max.z - bb.min.z;
+            const cx = (bb.min.x + bb.max.x) * 0.5, cy = (bb.min.y + bb.max.y) * 0.5, cz = (bb.min.z + bb.max.z) * 0.5;
+
+            const shape = new Ammo.btBoxShape(new Ammo.btVector3(sx * 0.5, sy * 0.5, sz * 0.5));
+            shape.setMargin(margin);
+            const childTransform = new Ammo.btTransform();
+            childTransform.setIdentity();
+            childTransform.setOrigin(new Ammo.btVector3(cx, cy, cz));
+            compound.addChildShape(childTransform, shape);
+            Ammo.destroy(childTransform);
+
+        } else {
+            // === Standard (non-humanoid) shape path ===
+            const geomNode = resolveUSE(shapeNode["-geometry"]);
+            const geometry = parseX3DGeometry(geomNode);
+            if (!geometry) return;
+
+            // Apply body-level @scale before the bounding box so the Bullet collision
+            // shape matches the visual size.
+            if (scale) geometry.scale(scale[0], scale[1], scale[2]);
+
+            geometry.computeBoundingBox();
+            const bb = geometry.boundingBox;
+            const sx = bb.max.x - bb.min.x, sy = bb.max.y - bb.min.y, sz = bb.max.z - bb.min.z;
+            const cx = (bb.min.x + bb.max.x) * 0.5, cy = (bb.min.y + bb.max.y) * 0.5, cz = (bb.min.z + bb.max.z) * 0.5;
+
+            const mesh = new THREE.Mesh(geometry, defaultMaterial);
+            mesh.castShadow = true; mesh.receiveShadow = true;
+            mesh.position.set(cx, cy, cz);
+            parent.add(mesh);
+
+            const shape = new Ammo.btBoxShape(new Ammo.btVector3(sx * 0.5, sy * 0.5, sz * 0.5));
+            shape.setMargin(margin);
+            const childTransform = new Ammo.btTransform();
+            childTransform.setIdentity();
+            childTransform.setOrigin(new Ammo.btVector3(cx, cy, cz));
+            compound.addChildShape(childTransform, shape);
+            Ammo.destroy(childTransform);
+        }
+    });
+
+    compound.calculateLocalInertia(mass, localInertia);
+
+    const startTransform = new Ammo.btTransform();
+    startTransform.setIdentity();
+    startTransform.setOrigin(new Ammo.btVector3(pos[0], pos[1], pos[2]));
+
+    if (ori) {
+        const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(ori[0], ori[1], ori[2]).normalize(), ori[3]);
+        const btQuat = new Ammo.btQuaternion(q.x, q.y, q.z, q.w);
+        startTransform.setRotation(btQuat);
+        Ammo.destroy(btQuat);
+    }
+
+    const motionState = new Ammo.btDefaultMotionState(startTransform);
+    const rbInfo = new Ammo.btRigidBodyConstructionInfo(mass, motionState, compound, localInertia);
+    const body = new Ammo.btRigidBody(rbInfo);
+
+    parent.userData.physicsBody = body;
+
+    if (mass > 0) {
+        rigidBodies.push(parent);
+        body.setActivationState(4);
+    }
+
+    physicsWorld.addRigidBody(body);
+    if (def) parsedBodiesMap[def] = { mesh: parent, body };
+}
+
+function createSoftBodyFromGeometry(sbConfig, shapeNode, colorArray) {
+    const mass = sbConfig["@mass"] || 1;
+    let geometry;
+    let material;
+    let isHumanoid = !!shapeNode._skinnedMesh;
+
+    if (isHumanoid) {
+        // Clone the humanoid skin geometry (preserves UVs perfectly).
+        geometry = shapeNode._geometry.clone();
+
+        // Bake the full world transform (including the wrapping Transform's @scale)
+        // into the vertex positions so the soft-body nodes start at the correct
+        // world-space location and size.
+        shapeNode._skinnedMesh.updateMatrixWorld(true);
+        geometry.applyMatrix4(shapeNode._skinnedMesh.matrixWorld);
+
+        material = shapeNode._skinnedMesh.material.clone();
+
+        // Keep the SkinnedMesh VISIBLE — its bone animation plays normally.
+        // The soft body is a separate physics object that starts co-located with
+        // the character, then falls and deforms under gravity and collisions.
+        // NOTE: deliberately NOT anchoring soft-body nodes to kinematic bones here.
+        // appendAnchor runs every solver substep; even low influence values
+        // (e.g. 0.3) converge exponentially to full pinning within ~1 s and
+        // completely prevent gravity from accumulating momentum on any node.
+    } else {
+        const geomNode = resolveUSE(shapeNode["-geometry"]);
+        geometry = parseX3DGeometry(geomNode);
+        if (!geometry || !geometry.attributes.position) return;
+
+        geometry.computeVertexNormals();
+
+        const scale = sbConfig["@scale"] || [1, 1, 1];
+        geometry.scale(scale[0], scale[1], scale[2]);
+
+        const ori = sbConfig["@orientation"];
+        if (ori) {
+            const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(ori[0], ori[1], ori[2]).normalize(), ori[3]);
+            geometry.applyQuaternion(q);
+        }
+
+        const pos = sbConfig["@position"] || [0,0,0];
+        geometry.translate(pos[0], pos[1], pos[2]);
+
+        material = new THREE.MeshLambertMaterial({ color: new THREE.Color(...colorArray), side: THREE.DoubleSide });
+    }
+
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.castShadow = true; mesh.receiveShadow = true; mesh.frustumCulled = false;
+    scene.add(mesh);
+
+    const softBodyHelpers = new Ammo.btSoftBodyHelpers();
+    const vertices = geometry.attributes.position.array;
+    let indices = geometry.index ? geometry.index.array : new Uint16Array(vertices.length / 3).map((_, i) => i);
+
+    if (vertices.length === 0 || indices.length === 0) return;
+
+    const numTriangles = Math.floor(indices.length / 3);
+    if (vertices.length / 3 > 25000) {
+        console.warn(`SoftBody Error: Mesh is too complex. Aborting.`);
+        return;
+    }
+
+    const vArray = Array.from(vertices);
+    const iArray = Array.from(indices);
+
+    const triMeshSoftBody = softBodyHelpers.CreateFromTriMesh(
+        physicsWorld.getWorldInfo(), vArray, iArray, numTriangles, true
+    );
+
+    // --- Jelly Physics Properties ---
+    const sbCfg = triMeshSoftBody.get_m_cfg();
+    sbCfg.set_viterations(10);
+    sbCfg.set_piterations(10);
+    sbCfg.set_kDF(0.5); // Friction
+    sbCfg.set_kDP(0.01); // Very low damping allows bouncy jiggly movement
+    sbCfg.set_kPR(15);  // Internal pressure holds its shape out like a balloon
+
+    // Enable BOTH soft-rigid (SDF_RS = 0x01) and soft-soft cluster (CL_SS = 0x10) collision.
+    // CreateFromTriMesh defaults to the cluster pipeline; without explicitly enabling SDF_RS the
+    // volume body never runs node-vs-rigid-body collision tests, so rigid bodies pass right through.
+    sbCfg.set_collisions(0x11);
+
+    const sbMat = triMeshSoftBody.get_m_materials().at(0);
+    sbMat.set_m_kLST(0.2); // Low stiffness gives it the soft elasticity
+    sbMat.set_m_kAST(0.2);
+    sbMat.set_m_kVST(0.2);
+
+    triMeshSoftBody.setTotalMass(mass, false);
+    triMeshSoftBody.generateBendingConstraints(2, sbMat);
+    triMeshSoftBody.setPose(false, true); // Extremely important so it remembers its humanoid rest-state
+
+    Ammo.castObject(triMeshSoftBody, Ammo.btCollisionObject).getCollisionShape().setMargin(margin);
+    physicsWorld.addSoftBody(triMeshSoftBody, 1, -1);
+    triMeshSoftBody.setActivationState(4);
+
+    const nodes = triMeshSoftBody.get_m_nodes();
+    const mapping = [];
+    for (let i = 0; i < vertices.length / 3; i++) {
+        let vx = vertices[i * 3], vy = vertices[i * 3 + 1], vz = vertices[i * 3 + 2];
+        let minDist = Infinity, minIdx = -1;
+        for (let j = 0; j < nodes.size(); j++) {
+            const nodePos = nodes.at(j).get_m_x();
+            const dx = vx - nodePos.x(), dy = vy - nodePos.y(), dz = vz - nodePos.z();
+            const dist = dx*dx + dy*dy + dz*dz;
+            if (dist < minDist) { minDist = dist; minIdx = j; }
+        }
+        mapping.push(minIdx);
+    }
+
+    mesh.userData.physicsBody = triMeshSoftBody;
+    mesh.userData.isGenericSoft = true;
+    mesh.userData.mapping = mapping;
+
+    const def = sbConfig["@DEF"];
+    if (def) parsedBodiesMap[def] = { mesh, body: triMeshSoftBody, isSoft: true };
+    softBodies.push(mesh);
+}
+
+function createSoftBodyCloth(sbConfig, shapeNode, colorArray) {
+    const pos = sbConfig["@position"] || [0,0,0];
+    const ori = sbConfig["@orientation"];
+    const mass = sbConfig["@mass"] || 1;
+
+    const grid = resolveUSE(shapeNode?.["-geometry"])?.ElevationGrid;
+    const xDim = grid?.["@xDimension"] || 36;
+    const zDim = grid?.["@zDimension"] || 26;
+    const xSpacing = grid?.["@xSpacing"] || 0.2;
+    const zSpacing = grid?.["@zSpacing"] || 0.2;
+
+    const segZ = xDim - 1, segY = zDim - 1, width = segZ * xSpacing, height = segY * zSpacing;
+
+    const geometry = new THREE.PlaneGeometry(width, height, segZ, segY);
+    geometry.rotateY(Math.PI * 0.5);
+
+    if (ori) {
+        const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(ori[0], ori[1], ori[2]).normalize(), ori[3]);
+        geometry.applyQuaternion(q);
+    }
+
+    geometry.translate(pos[0], pos[1] + height * 0.5, pos[2] - width * 0.5);
+
+    const material = new THREE.MeshLambertMaterial({ color: new THREE.Color(...colorArray), side: THREE.DoubleSide });
+    const clothMesh = new THREE.Mesh(geometry, material);
+    clothMesh.castShadow = true; clothMesh.receiveShadow = true; clothMesh.frustumCulled = false;
+    scene.add(clothMesh);
+
+    const softBodyHelpers = new Ammo.btSoftBodyHelpers();
+
+    const posArray = geometry.attributes.position.array;
+    const getVert = (idx) => new Ammo.btVector3(posArray[idx*3], posArray[idx*3+1], posArray[idx*3+2]);
+
+    const corner00 = getVert(0);
+    const corner01 = getVert(segZ);
+    const corner10 = getVert(segY * (segZ + 1));
+    const corner11 = getVert((segY + 1) * (segZ + 1) - 1);
+
+    const clothSoftBody = softBodyHelpers.CreatePatch(physicsWorld.getWorldInfo(), corner00, corner01, corner10, corner11, segZ + 1, segY + 1, 0, true);
+
+    const sbCfg = clothSoftBody.get_m_cfg();
+    sbCfg.set_viterations(10); sbCfg.set_piterations(10);
+    clothSoftBody.setTotalMass(mass, false);
+    Ammo.castObject(clothSoftBody, Ammo.btCollisionObject).getCollisionShape().setMargin(margin * 3);
+
+    physicsWorld.addSoftBody(clothSoftBody, 1, -1);
+    clothMesh.userData.physicsBody = clothSoftBody;
+    clothMesh.userData.isCloth = true;
+    clothSoftBody.setActivationState(4);
+
+    const def = sbConfig["@DEF"];
+    if (def) parsedBodiesMap[def] = { mesh: clothMesh, body: clothSoftBody, isSoft: true };
+    softBodies.push(clothMesh);
+}
+
+function createSoftBodySphere(sbConfig, shapeNode, colorArray) {
+    const pos = sbConfig["@position"] || [0,0,0];
+    const ori = sbConfig["@orientation"];
+    const mass = sbConfig["@mass"] || 1;
+
+    const sphere = resolveUSE(shapeNode?.["-geometry"])?.Sphere;
+    const radius = sphere?.["@radius"] || 1.0;
+
+    const geometry = new THREE.SphereGeometry(radius, 32, 16);
+
+    if (ori) {
+        const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(ori[0], ori[1], ori[2]).normalize(), ori[3]);
+        geometry.applyQuaternion(q);
+    }
+
+    geometry.translate(pos[0], pos[1], pos[2]);
+
+    const material = new THREE.MeshLambertMaterial({ color: new THREE.Color(...colorArray) });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.castShadow = true; mesh.receiveShadow = true; mesh.frustumCulled = false;
+    scene.add(mesh);
+
+    const softBodyHelpers = new Ammo.btSoftBodyHelpers();
+    const center = new Ammo.btVector3(0, 0, 0);
+    const radiusVec = new Ammo.btVector3(radius, radius, radius);
+
+    const softBody = softBodyHelpers.CreateEllipsoid(physicsWorld.getWorldInfo(), center, radiusVec, 256);
+
+    const tr = new Ammo.btTransform();
+    tr.setIdentity();
+    if (ori) {
+        const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(ori[0], ori[1], ori[2]).normalize(), ori[3]);
+        const btQuat = new Ammo.btQuaternion(q.x, q.y, q.z, q.w);
+        tr.setRotation(btQuat);
+        Ammo.destroy(btQuat);
+    }
+    const btPos = new Ammo.btVector3(pos[0], pos[1], pos[2]);
+    tr.setOrigin(btPos);
+    softBody.transform(tr);
+
+    const sbCfg = softBody.get_m_cfg();
+    sbCfg.set_viterations(10); sbCfg.set_piterations(10); sbCfg.set_kDF(0.1); sbCfg.set_kDP(0.01); sbCfg.set_kPR(10);
+
+    const sbMat = softBody.get_m_materials().at(0);
+    sbMat.set_m_kLST(0.15); sbMat.set_m_kAST(0.1); sbMat.set_m_kVST(0.1);
+
+    softBody.setTotalMass(mass, false);
+    Ammo.castObject(softBody, Ammo.btCollisionObject).getCollisionShape().setMargin(margin);
+
+    softBody.generateBendingConstraints(2, sbMat);
+    physicsWorld.addSoftBody(softBody, 1, -1);
+
+    mesh.userData.physicsBody = softBody;
+    mesh.userData.isSphere = true;
+    softBody.setActivationState(4);
+
+    const nodes = softBody.get_m_nodes();
+    const mapping = [];
+    const positions = geometry.attributes.position.array;
+
+    for (let i = 0; i < positions.length / 3; i++) {
+        let vx = positions[i * 3], vy = positions[i * 3 + 1], vz = positions[i * 3 + 2];
+        let minDist = Infinity, minIdx = -1;
+        for (let j = 0; j < nodes.size(); j++) {
+            let nodePos = nodes.at(j).get_m_x();
+            let dx = vx - nodePos.x(), dy = vy - nodePos.y(), dz = vz - nodePos.z();
+            let dist = dx * dx + dy * dy + dz * dz;
+            if (dist < minDist) { minDist = dist; minIdx = j; }
+        }
+        mapping.push(minIdx);
+    }
+    mesh.userData.mapping = mapping;
+
+    const def = sbConfig["@DEF"];
+    if (def) parsedBodiesMap[def] = { mesh, body: softBody, isSoft: true };
+
+    Ammo.destroy(center); Ammo.destroy(radiusVec); Ammo.destroy(tr); Ammo.destroy(btPos);
+    softBodies.push(mesh);
+}
+
+function createHinge(jointConfig) {
+    const b1Name = jointConfig["-body1"]?.RigidBody?.["@USE"] || jointConfig["@body1"];
+    const b2Name = jointConfig["-body2"]?.RigidBody?.["@USE"] || jointConfig["@body2"];
+
+    const b1 = parsedBodiesMap[b1Name];
+    const b2 = parsedBodiesMap[b2Name];
+    const ap = jointConfig["@anchorPoint"];
+    const ax = jointConfig["@axis"];
+
+    if (!b1 || !b2) return;
+
+    const pA = new Ammo.btVector3(ap[0] - b1.mesh.position.x, ap[1] - b1.mesh.position.y, ap[2] - b1.mesh.position.z);
+    const pB = new Ammo.btVector3(ap[0] - b2.mesh.position.x, ap[1] - b2.mesh.position.y, ap[2] - b2.mesh.position.z);
+    const axis = new Ammo.btVector3(ax[0], ax[1], ax[2]);
+
+    globalHinge = new Ammo.btHingeConstraint(b1.body, b2.body, pA, pB, axis, axis, true);
+    physicsWorld.addConstraint(globalHinge, true);
+}
+
+function createStitch(stitchConfig) {
+    const rbName = stitchConfig["-body1"]?.RigidBody?.["@USE"] || stitchConfig["@body1"];
+    const sbName = stitchConfig["-body2"]?.SoftBody?.["@USE"] || stitchConfig["@body2"];
+
+    const rbEntry = parsedBodiesMap[rbName];
+    const sbEntry = parsedBodiesMap[sbName];
+
+    if (!rbEntry || !sbEntry) return;
+
+    const indices = (stitchConfig["@body1Index"] || []).map(Number);
+    const weights = (stitchConfig["@weight"] || []).map(Number);
+
+    const softBody = sbEntry.body;
+    indices.forEach((nodeIndex, i) => {
+        const weight = weights[i] !== undefined ? weights[i] : 1.0;
+        softBody.appendAnchor(nodeIndex, rbEntry.body, false, weight);
+    });
 }
 
 function parseBackground(bgData) {
@@ -512,21 +1037,16 @@ function parseViewpoint(vpData) {
         camera.position.set(pos[0], pos[1], pos[2]);
     }
     if (vpData["@fieldOfView"]) {
-        // Convert radians to degrees
         camera.fov = vpData["@fieldOfView"] * (180 / Math.PI);
         camera.updateProjectionMatrix();
     }
     if (vpData["@centerOfRotation"]) {
         const cor = vpData["@centerOfRotation"];
-	if (cor) {
-	    camera.lookAt(cor[0], cor[1], cor[2]);
-            if (controls) {
-	    	controls.target.set(cor[0], cor[1], cor[2]);
-	    }
-	}
-	if (controls) {
-            controls.update();
-	}
+        if (cor) {
+            camera.lookAt(cor[0], cor[1], cor[2]);
+            if (controls) controls.target.set(cor[0], cor[1], cor[2]);
+        }
+        if (controls) controls.update();
     }
 }
 
@@ -544,12 +1064,8 @@ function parseDirectionalLight(dlData) {
 
     const light = new THREE.DirectionalLight(new THREE.Color(color[0], color[1], color[2]), intensity);
 
-    // In Three.js, directional lights cast towards target (default origin).
-    // We scale position back along the negative vector to match X3D direction.
     const dist = 15;
     light.position.set(-dir[0] * dist, -dir[1] * dist, -dir[2] * dist);
-
-    // Shadow mapping defaults for this scene scale
     light.castShadow = true;
     light.shadow.camera.left = -dist; light.shadow.camera.right = dist;
     light.shadow.camera.top = dist; light.shadow.camera.bottom = -dist;
@@ -580,1011 +1096,18 @@ function parseSpotLight(slData) {
     const light = new THREE.SpotLight(new THREE.Color(color[0], color[1], color[2]), intensity, radius, cutOffAngle);
     light.position.set(loc[0], loc[1], loc[2]);
 
-    // Spotlights in ThreeJS require a target Object3D
     const target = new THREE.Object3D();
     target.position.set(loc[0] + dir[0], loc[1] + dir[1], loc[2] + dir[2]);
     scene.add(target);
     light.target = target;
-
     light.castShadow = true;
     scene.add(light);
 }
 
-// X3D: { "NurbsSurface": {
-//   "@uOrder": 3, "@vOrder": 3,
-//   "@uDimension": 4, "@vDimension": 4,
-//   "@uKnot": [...], "@vKnot": [...],
-//   "-controlPoint": { "Coordinate": { "@point": [...] } }
-// }}
-function x3dNurbsSurfaceToThree(node) {
-  const uOrder = node["@uOrder"] !== undefined ? node["@uOrder"] : 3;
-  const vOrder = node["@vOrder"] !== undefined ? node["@vOrder"] : 3;
-  const uDimension = node["@uDimension"] || 0;
-  const vDimension = node["@vDimension"] || 0;
-  const uKnot = node["@uKnot"] || [];
-  const vKnot = node["@vKnot"] || [];
-
-  const coordNode = node["-controlPoint"]?.Coordinate || node["-coord"]?.Coordinate || node.Coordinate;
-  const pts = coordNode?.["@point"] || [];
-  const ctrlPts = [];
-  for (let i = 0; i < pts.length; i += 3) {
-      ctrlPts.push(new THREE.Vector4(pts[i], pts[i + 1], pts[i + 2], 1.0));
-  }
-
-  const surface = new NURBSSurface(
-    uOrder - 1, vOrder - 1, uKnot, vKnot,
-    // Reshape flat array into [uDimension][vDimension] grid
-    Array.from({ length: uDimension }, (_, i) =>
-      ctrlPts.slice(i * vDimension, (i + 1) * vDimension))
-  );
-
-  return new ParametricGeometry(
-    (u, v, target) => surface.getPoint(u, v, target),
-    uDimension * 4, vDimension * 4
-  );
-}
-
-// TriangleSet: raw triangle soup — vertices are already in order
-function x3dTriangleSetToThree(node) {
-  const coordNode = node["-coord"]?.Coordinate || node.Coordinate;
-  const pts = coordNode?.["@point"] || [];
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position',
-    new THREE.Float32BufferAttribute(pts, 3));
-  geo.computeVertexNormals();
-  return geo;
-}
-
-// IndexedTriangleSet: like above but with an index buffer
-function x3dIndexedTriangleSetToThree(node) {
-  const index = node["@index"] || [];
-  const coordNode = node["-coord"]?.Coordinate || node.Coordinate;
-  const pts = coordNode?.["@point"] || [];
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position',
-    new THREE.Float32BufferAttribute(pts, 3));
-  geo.setIndex(index);
-  geo.computeVertexNormals();
-  return geo;
-}
-
-// Convert triangle strips to triangle list
-function stripToTriangles(strip) {
-  const tris = [];
-  for (let i = 0; i < strip.length - 2; i++) {
-    tris.push(i % 2 === 0
-      ? [strip[i], strip[i+1], strip[i+2]]
-      : [strip[i+1], strip[i], strip[i+2]]);
-  }
-  return tris;
-}
-
-// Convert triangle fans to triangle list
-function fanToTriangles(fan) {
-  const tris = [];
-  for (let i = 1; i < fan.length - 1; i++) {
-    tris.push([fan[0], fan[i], fan[i+1]]);
-  }
-  return tris;
-}
-
-async function createTextGeometry(textData) {
-      const fontStyle = textData['-fontStyle']?.FontStyle;
-      const justify = fontStyle?.["@justify"] || ['BEGIN'];
-      const family = (fontStyle?.["@family"] || ['SANS'])[0].toUpperCase();
-      const fontFile = fontMap[family] || fontMap['SANS'];
-
-      const font = await new Promise((resolve, reject) => {
-        new FontLoader().load(
-          fontFile,
-          resolve, undefined, reject
-        );
-      });
-
-      const strings = textData['@string'] || ['Text'];
-      const size    = fontStyle?.['@size'] ?? 1;
-
-      if (strings.length === 1) {
-        const geometry = new TextGeometry(strings[0], { font, size, depth: 0, curveSegments: 12 });
-        geometry.computeVertexNormals();
-        return geometry;
-      }
-
-      const group = new THREE.Group();
-      strings.forEach((str, index) => {
-        const geometry = new TextGeometry(str, { font, size, depth: 0, curveSegments: 12 });
-        if (justify[0] === 'MIDDLE') {
-          geometry.computeBoundingBox();
-          const centerX = (geometry.boundingBox.max.x - geometry.boundingBox.min.x) / 2;
-          geometry.translate(-centerX, 0, 0);
-        }
-        if (justify[1] === 'MIDDLE') {
-          geometry.computeBoundingBox();
-          const centerY = (geometry.boundingBox.max.y - geometry.boundingBox.min.y) / 2;
-          geometry.translate(0, -centerY, 0);
-        }
-        geometry.computeVertexNormals();
-        const mesh = new THREE.Mesh(geometry);
-        mesh.position.y = -index * size * 1.2;
-        group.add(mesh);
-      });
-      return group;
-};
-
-function parseX3DGeometry(geomNode) {
-    if (!geomNode) {
-	    console.warn("No geomNode!");
-	    return null;
-    }
-
-    // 3D primitives
-    if (geomNode.Text) {
-	return createTextGeometry(geomNode.Text);
-    }
-    if (geomNode.Extrusion) {
-        const crossSection = geomNode.Extrusion["@crossSection"];
-        const spine = geomNode.Extrusion["@spine"];
-        const scale = geomNode.Extrusion["@scale"];
-        const beginCap = geomNode.Extrusion["@beginCap"] ?? true;
-        const endCap = geomNode.Extrusion["@endCap"] ?? true;
-
-	// 1. Build the 2D Shape from crossSection
-	const shape = new THREE.Shape();
-	if (crossSection) {
-	    for (let i = 0; i < crossSection.length; i += 2) {
-	      const x = crossSection[i];
-	      const y = crossSection[i + 1];
-	      if (i === 0) shape.moveTo(x, y);
-	      else shape.lineTo(x, y);
-	    }
-	    shape.closePath();
-	}
-
-	// 2. Build the spine as a CatmullRomCurve3
-	const spinePoints = (spine || []).map(p => new THREE.Vector3(p[0], p[1], p[2]));
-	const path = new THREE.CatmullRomCurve3(spinePoints);
-
-        // 3. Extrude along spine path
-	const extrudeSettings = {
-	  steps: (spine || []).length * 4,
-	  extrudePath: path,
-	  bevelEnabled: false,
-	};
-
-	return new THREE.ExtrudeGeometry(shape, extrudeSettings);
-    }
-    if (geomNode.Box) {
-        const s = geomNode.Box["@size"] || [1,1,1];
-        return new THREE.BoxGeometry(s[0], s[1], s[2]);
-    }
-    if (geomNode.Sphere) {
-        const r = geomNode.Sphere["@radius"] || 1;
-        return new THREE.SphereGeometry(r, 32, 16);
-    }
-    if (geomNode.Cone) {
-        const h = geomNode.Cone["@height"] || 2;
-        const r = geomNode.Cone["@bottomRadius"] || 1;
-        return new THREE.ConeGeometry(r, h, 32);
-    }
-    if (geomNode.Cylinder) {
-        const h = geomNode.Cylinder["@height"] || 2;
-        const r = geomNode.Cylinder["@radius"] || 1;
-        return new THREE.CylinderGeometry(r, r, h, 32);
-    }
-
-    // Mesh-based
-    if (geomNode.IndexedFaceSet) {
-        const ifs = geomNode.IndexedFaceSet;
-        const coordNode = ifs["-coord"]?.Coordinate || ifs.Coordinate;
-        const coords = coordNode?.["@point"] || [];
-        const indices = ifs["@coordIndex"] || [];
-
-        const geom = new THREE.BufferGeometry();
-        const verts = new Float32Array(coords);
-        geom.setAttribute("position", new THREE.BufferAttribute(verts, 3));
-        geom.setIndex(indices);
-        geom.computeVertexNormals();
-        return geom;
-    }
-
-    // ElevationGrid
-    if (geomNode.ElevationGrid) {
-        const eg = geomNode.ElevationGrid;
-        const xDim = eg["@xDimension"];
-        const zDim = eg["@zDimension"];
-        const xStep = eg["@xSpacing"] || 1;
-        const zStep = eg["@zSpacing"] || 1;
-        const heights = eg["@height"] || [];
-
-        const geom = new THREE.PlaneGeometry(
-            xDim * xStep,
-            zDim * zStep,
-            xDim - 1,
-            zDim - 1
-        );
-
-        const pos = geom.attributes.position;
-        for (let i = 0; i < heights.length; i++) {
-            pos.setY(i, heights[i]);
-        }
-        pos.needsUpdate = true;
-        geom.computeVertexNormals();
-        return geom;
-    }
-
-    // 2D primitives (extruded into 3D)
-    if (geomNode.Rectangle2D) {
-        const s = geomNode.Rectangle2D["@size"] || [1,1];
-        return new THREE.PlaneGeometry(s[0], s[1]);
-    }
-    if (geomNode.Circle2D) {
-        const r = geomNode.Circle2D["@radius"] || 1;
-        return new THREE.CircleGeometry(r, 32);
-    }
-    if (geomNode.Disk2D) {
-        const r = geomNode.Disk2D["@outerRadius"] || 1;
-        return new THREE.RingGeometry(0, r, 32);
-    }
-
-    // Triangle sets
-    if (geomNode.TriangleSet) {
-        return x3dTriangleSetToThree(geomNode.TriangleSet);
-    }
-
-    if (geomNode.NurbsSurface) {
-        return x3dNurbsSurfaceToThree(geomNode.NurbsSurface);
-    }
-
-    // Fallback
-    console.warn("Unsupported X3D geometry:", geomNode);
-    return null;
-}
-
-function createCompoundRigidBody(def, shapeNodes, mass, pos, colorArray) {
-    const material = new THREE.MeshPhongMaterial({ color: new THREE.Color(...colorArray) });
-
-    // Parent Three.js object representing the whole rigid body
-    const parent = new THREE.Object3D();
-    parent.position.set(pos[0], pos[1], pos[2]);
-    scene.add(parent);
-
-    // Bullet compound shape
-    const compound = new Ammo.btCompoundShape();
-    const localInertia = new Ammo.btVector3(0, 0, 0);
-
-    shapeNodes.forEach(shapeNode => {
-        const geomNode = shapeNode["-geometry"];
-        const geometry = parseX3DGeometry(geomNode);
-        if (!geometry) return;
-
-        geometry.computeBoundingBox();
-        const bb = geometry.boundingBox;
-        const sx = bb.max.x - bb.min.x;
-        const sy = bb.max.y - bb.min.y;
-        const sz = bb.max.z - bb.min.z;
-
-        // Center of this geometry in its local space
-        const cx = (bb.min.x + bb.max.x) * 0.5;
-        const cy = (bb.min.y + bb.max.y) * 0.5;
-        const cz = (bb.min.z + bb.max.z) * 0.5;
-
-        // Three.js child mesh
-        const mesh = new THREE.Mesh(geometry, material);
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-        mesh.position.set(cx, cy, cz);
-        parent.add(mesh);
-
-        // Bullet child shape
-        const shape = new Ammo.btBoxShape(new Ammo.btVector3(sx * 0.5, sy * 0.5, sz * 0.5));
-        shape.setMargin(margin);
-
-        const childTransform = new Ammo.btTransform();
-        childTransform.setIdentity();
-        childTransform.setOrigin(new Ammo.btVector3(cx, cy, cz));
-
-        compound.addChildShape(childTransform, shape);
-    });
-
-    // Compute inertia for the compound
-    compound.calculateLocalInertia(mass, localInertia);
-
-    const startTransform = new Ammo.btTransform();
-    startTransform.setIdentity();
-    startTransform.setOrigin(new Ammo.btVector3(pos[0], pos[1], pos[2]));
-
-    const motionState = new Ammo.btDefaultMotionState(startTransform);
-    const rbInfo = new Ammo.btRigidBodyConstructionInfo(mass, motionState, compound, localInertia);
-    const body = new Ammo.btRigidBody(rbInfo);
-
-    parent.userData.physicsBody = body;
-
-    if (mass > 0) {
-        rigidBodies.push(parent);
-        body.setActivationState(4);
-    }
-
-    physicsWorld.addRigidBody(body);
-    if (def) parsedBodiesMap[def] = { mesh: parent, body };
-}
-
-function parseRigidBodyCollection(collection) {
-    if (!collection) {
-        console.error("No RigidBodyCollection found.");
-        return;
-    }
-
-    const gravity = collection["@gravity"] || [0, -9.8, 0];
-    physicsWorld.setGravity(new Ammo.btVector3(gravity[0], gravity[1], gravity[2]));
-    physicsWorld.getWorldInfo().set_m_gravity(new Ammo.btVector3(gravity[0], gravity[1], gravity[2]));
-
-    // 1. Parse Bodies
-    if (collection["-bodies"]) {
-        collection["-bodies"].forEach(bodyNode => {
-	    if (bodyNode.RigidBody) {
-                const rb = bodyNode.RigidBody;
-                const mass = rb["@mass"];
-                const pos = rb["@position"];
-                const def = rb["@DEF"];
-
-                const shapeNodes = extractShapeNodes(rb["-geometry"]);
-                if (!shapeNodes.length) {
-                    console.warn("RigidBody has no shapeNodes:", rb);
-                    return;
-                }
-
-                // Use the first shape’s color as the visual material color
-                const firstShape = shapeNodes[0];
-                const color = firstShape?.["-appearance"]?.Appearance?.["-material"]?.Material?.["@diffuseColor"] || [1, 1, 1];
-
-                createCompoundRigidBody(def, shapeNodes, mass, pos, color);
-            } else if (bodyNode.SoftBody) {
-	        const sb = bodyNode.SoftBody;
-                const shapeNodes = extractShapeNodes(sb["-geometry"]);
-                if (!shapeNodes.length) {
-                    console.warn("SoftBody has no shapeNodes:", sb);
-                    return;
-                }
-
-                // Option 2: only use the first shape for soft bodies
-                const shapeNode = shapeNodes[0];
-                const geomNode = shapeNode["-geometry"];
-                const col = shapeNode?.["-appearance"]?.Appearance?.["-material"]?.Material?.["@diffuseColor"] || [0.8, 0.8, 0.8];
-
-                if (!geomNode) {
-                    console.warn("SoftBody without geometry", sb);
-                    return;
-                }
-
-                if (geomNode.ElevationGrid) {
-                    createSoftBodyCloth(sb, shapeNode, col);
-                } else if (geomNode.Sphere) {
-                    createSoftBodySphere(sb, shapeNode, col);
-                } else if (geomNode.Polyline2D || geomNode.NurbsCurve) {
-                    createSoftBodyRope(sb, shapeNode, col);
-                } else {
-                    createSoftBodyFromGeometry(sb, shapeNode, col);
-                }
-            }
-        });
-    }
-
-    // 2. Parse Joints
-    if (collection["-joints"]) {
-        collection["-joints"].forEach(jointNode => {
-            if (jointNode.SingleAxisHingeJoint) {
-                createHinge(jointNode.SingleAxisHingeJoint);
-            } else if (jointNode.Stitch) {
-                createStitch(jointNode.Stitch);
-            }
-        });
-    }
-}
-
-function createRigidBodyFromGeometry(def, geometry, mass, pos, colorArray) {
-    const material = new THREE.MeshPhongMaterial({ color: new THREE.Color(...colorArray) });
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    mesh.position.set(pos[0], pos[1], pos[2]);
-    scene.add(mesh);
-
-    // Compute bounding box for collision shape
-    geometry.computeBoundingBox();
-    const bb = geometry.boundingBox;
-    const sx = bb.max.x - bb.min.x;
-    const sy = bb.max.y - bb.min.y;
-    const sz = bb.max.z - bb.min.z;
-
-    const shape = new Ammo.btBoxShape(new Ammo.btVector3(sx * 0.5, sy * 0.5, sz * 0.5));
-    shape.setMargin(margin);
-
-    const transform = new Ammo.btTransform();
-    transform.setIdentity();
-    transform.setOrigin(new Ammo.btVector3(pos[0], pos[1], pos[2]));
-    const motionState = new Ammo.btDefaultMotionState(transform);
-
-    const localInertia = new Ammo.btVector3(0,0,0);
-    shape.calculateLocalInertia(mass, localInertia);
-
-    const rbInfo = new Ammo.btRigidBodyConstructionInfo(mass, motionState, shape, localInertia);
-    const body = new Ammo.btRigidBody(rbInfo);
-
-    mesh.userData.physicsBody = body;
-
-    if (mass > 0) {
-        rigidBodies.push(mesh);
-        body.setActivationState(4);
-    }
-
-    physicsWorld.addRigidBody(body);
-    if (def) parsedBodiesMap[def] = { mesh, body };
-}
-
-function createSoftBodyFromGeometry(sbConfig, shapeNode, colorArray) {
-    const pos = sbConfig["@position"] || [0,0,0];
-    const mass = sbConfig["@mass"] || 1;
-
-    const geomNode = shapeNode["-geometry"];
-    const geometry = parseX3DGeometry(geomNode);
-    if (!geometry) {
-        console.warn("SoftBody generic: unsupported geometry", geomNode);
-        return;
-    }
-
-    geometry.computeVertexNormals();
-    geometry.translate(pos[0], pos[1], pos[2]);
-
-    const material = new THREE.MeshLambertMaterial({
-        color: new THREE.Color(...colorArray),
-        side: THREE.DoubleSide
-    });
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    mesh.frustumCulled = false;
-    scene.add(mesh);
-
-    // Build tri mesh for Ammo
-    const softBodyHelpers = new Ammo.btSoftBodyHelpers();
-    const vertices = geometry.attributes.position.array;
-    let indices;
-
-    if (geometry.index) {
-        indices = geometry.index.array;
-    } else {
-        // assume non‑indexed triangles
-        indices = new Uint16Array(vertices.length / 3);
-        for (let i = 0; i < indices.length; i++) indices[i] = i;
-    }
-
-    const triMeshSoftBody = softBodyHelpers.CreateFromTriMesh(
-        physicsWorld.getWorldInfo(),
-        vertices,
-        indices,
-        indices.length / 3,
-        true
-    );
-
-    const sbCfg = triMeshSoftBody.get_m_cfg();
-    sbCfg.set_viterations(10);
-    sbCfg.set_piterations(10);
-    sbCfg.set_kDF(0.2);
-    sbCfg.set_kDP(0.01);
-    sbCfg.set_kPR(5);
-
-    const sbMat = triMeshSoftBody.get_m_materials().at(0);
-    sbMat.set_m_kLST(0.4);
-    sbMat.set_m_kAST(0.4);
-    sbMat.set_m_kVST(0.4);
-
-    triMeshSoftBody.setTotalMass(mass, false);
-    Ammo.castObject(triMeshSoftBody, Ammo.btCollisionObject)
-        .getCollisionShape()
-        .setMargin(margin);
-
-    physicsWorld.addSoftBody(triMeshSoftBody, 1, -1);
-    triMeshSoftBody.setActivationState(4);
-
-    // Map geometry vertices to soft‑body nodes
-    const nodes = triMeshSoftBody.get_m_nodes();
-    const numNodes = nodes.size();
-    const mapping = [];
-    const positions = geometry.attributes.position.array;
-
-    for (let i = 0; i < positions.length / 3; i++) {
-        let vx = positions[i * 3];
-        let vy = positions[i * 3 + 1];
-        let vz = positions[i * 3 + 2];
-        let minDist = Infinity;
-        let minIdx = -1;
-        for (let j = 0; j < numNodes; j++) {
-            const nodePos = nodes.at(j).get_m_x();
-            const dx = vx - nodePos.x();
-            const dy = vy - nodePos.y();
-            const dz = vz - nodePos.z();
-            const dist = dx*dx + dy*dy + dz*dz;
-            if (dist < minDist) {
-                minDist = dist;
-                minIdx = j;
-            }
-        }
-        mapping.push(minIdx);
-    }
-
-    mesh.userData.physicsBody = triMeshSoftBody;
-    mesh.userData.isGenericSoft = true;
-    mesh.userData.mapping = mapping;
-
-    const def = sbConfig["@DEF"];
-    if (def) parsedBodiesMap[def] = { mesh, body: triMeshSoftBody, isSoft: true };
-    softBodies.push(mesh);
-}
-
-function createSoftBodyRope(sbConfig, shapeNode, colorArray) {
-    const pos = sbConfig["@position"] || [0,0,0];
-    const mass = sbConfig["@mass"] || 1;
-
-    const geomNode = shapeNode["-geometry"];
-    let points = [];
-
-    if (geomNode.Polyline2D) {
-        const pts = geomNode.Polyline2D["@lineSegments"] || geomNode.Polyline2D["@point"] || [];
-        for (let i = 0; i < pts.length; i += 2) {
-            points.push(new THREE.Vector3(pts[i], pts[i+1], 0));
-        }
-    } else if (geomNode.NurbsCurve) {
-        const coordNode = geomNode.NurbsCurve["-controlPoint"]?.Coordinate;
-        const ctrl = coordNode?.["@point"] || [];
-        for (let i = 0; i < ctrl.length; i += 3) {
-            points.push(new THREE.Vector3(ctrl[i], ctrl[i+1], ctrl[i+2]));
-        }
-    }
-
-    if (points.length < 2) {
-        console.warn("Rope soft body: not enough points", geomNode);
-        return;
-    }
-
-    // Three.js line for visualization
-    const ropeGeom = new THREE.BufferGeometry().setFromPoints(points);
-    ropeGeom.translate(pos[0], pos[1], pos[2]);
-    const ropeMat = new THREE.LineBasicMaterial({ color: new THREE.Color(...colorArray) });
-    const ropeMesh = new THREE.Line(ropeGeom, ropeMat);
-    ropeMesh.frustumCulled = false;
-    scene.add(ropeMesh);
-
-    // Ammo rope
-    const softBodyHelpers = new Ammo.btSoftBodyHelpers();
-    const worldInfo = physicsWorld.getWorldInfo();
-
-    const start = new Ammo.btVector3(points[0].x + pos[0], points[0].y + pos[1], points[0].z + pos[2]);
-    const end   = new Ammo.btVector3(points[points.length-1].x + pos[0], points[points.length-1].y + pos[1], points[points.length-1].z + pos[2]);
-
-    const ropeSoftBody = softBodyHelpers.CreateRope(worldInfo, start, end, points.length - 1, 0);
-    ropeSoftBody.setTotalMass(mass, false);
-
-    const sbCfg = ropeSoftBody.get_m_cfg();
-    sbCfg.set_viterations(10);
-    sbCfg.set_piterations(10);
-    sbCfg.set_kDP(0.01);
-    sbCfg.set_kDF(0.2);
-
-    physicsWorld.addSoftBody(ropeSoftBody, 1, -1);
-    ropeSoftBody.setActivationState(4);
-
-    ropeMesh.userData.physicsBody = ropeSoftBody;
-    ropeMesh.userData.isRope = true;
-
-    const def = sbConfig["@DEF"];
-    if (def) parsedBodiesMap[def] = { mesh: ropeMesh, body: ropeSoftBody, isSoft: true };
-    softBodies.push(ropeMesh);
-
-    Ammo.destroy(start);
-    Ammo.destroy(end);
-}
-
-
-function createRigidBody(def, size, mass, pos, colorArray) {
-    const [sx, sy, sz] = size;
-    const material = new THREE.MeshPhongMaterial({ color: new THREE.Color(...colorArray) });
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), material);
-    mesh.castShadow = true; mesh.receiveShadow = true;
-    mesh.position.set(pos[0], pos[1], pos[2]);
-
-    const shape = new Ammo.btBoxShape(new Ammo.btVector3(sx * 0.5, sy * 0.5, sz * 0.5));
-    shape.setMargin(margin);
-
-    const transform = new Ammo.btTransform();
-    transform.setIdentity();
-    transform.setOrigin(new Ammo.btVector3(pos[0], pos[1], pos[2]));
-    const motionState = new Ammo.btDefaultMotionState(transform);
-
-    const localInertia = new Ammo.btVector3(0, 0, 0);
-    shape.calculateLocalInertia(mass, localInertia);
-
-    const rbInfo = new Ammo.btRigidBodyConstructionInfo(mass, motionState, shape, localInertia);
-    const body = new Ammo.btRigidBody(rbInfo);
-
-    mesh.userData.physicsBody = body;
-    scene.add(mesh);
-
-    if (mass > 0) {
-        rigidBodies.push(mesh);
-        body.setActivationState(4); // Disable deactivation
-    }
-    physicsWorld.addRigidBody(body);
-    if (def) parsedBodiesMap[def] = { mesh, body };
-}
-
-function createSoftBodyCloth(sbConfig, shapeNode, colorArray) {
-    const pos = sbConfig["@position"] || [0,0,0];
-    const mass = sbConfig["@mass"] || 1;
-
-    const grid = shapeNode?.["-geometry"]?.ElevationGrid;
-    const xDim = grid?.["@xDimension"] || 36;
-    const zDim = grid?.["@zDimension"] || 26;
-    const xSpacing = grid?.["@xSpacing"] || 0.2;
-    const zSpacing = grid?.["@zSpacing"] || 0.2;
-
-    const segZ = xDim - 1;
-    const segY = zDim - 1;
-    const width = segZ * xSpacing;
-    const height = segY * zSpacing;
-
-    const geometry = new THREE.PlaneGeometry(width, height, segZ, segY);
-    geometry.rotateY(Math.PI * 0.5);
-    geometry.translate(pos[0], pos[1] + height * 0.5, pos[2] - width * 0.5);
-
-    const material = new THREE.MeshLambertMaterial({ color: new THREE.Color(...colorArray), side: THREE.DoubleSide });
-    const clothMesh = new THREE.Mesh(geometry, material);
-    clothMesh.castShadow = true; clothMesh.receiveShadow = true;
-    clothMesh.frustumCulled = false;
-
-    scene.add(clothMesh);
-
-    const softBodyHelpers = new Ammo.btSoftBodyHelpers();
-    const corner00 = new Ammo.btVector3(pos[0], pos[1] + height, pos[2]);
-    const corner01 = new Ammo.btVector3(pos[0], pos[1] + height, pos[2] - width);
-    const corner10 = new Ammo.btVector3(pos[0], pos[1], pos[2]);
-    const corner11 = new Ammo.btVector3(pos[0], pos[1], pos[2] - width);
-
-    const clothSoftBody = softBodyHelpers.CreatePatch(physicsWorld.getWorldInfo(), corner00, corner01, corner10, corner11, segZ + 1, segY + 1, 0, true);
-
-    const sbCfg = clothSoftBody.get_m_cfg();
-    sbCfg.set_viterations(10);
-    sbCfg.set_piterations(10);
-    clothSoftBody.setTotalMass(mass, false);
-    Ammo.castObject(clothSoftBody, Ammo.btCollisionObject).getCollisionShape().setMargin(margin * 3);
-
-    physicsWorld.addSoftBody(clothSoftBody, 1, -1);
-    clothMesh.userData.physicsBody = clothSoftBody;
-    clothMesh.userData.isCloth = true;
-    clothSoftBody.setActivationState(4);
-
-    const def = sbConfig["@DEF"];
-    if (def) parsedBodiesMap[def] = { mesh: clothMesh, body: clothSoftBody, isSoft: true };
-    softBodies.push(clothMesh);
-}
-
-function createSoftBodySphere(sbConfig, shapeNode, colorArray) {
-    const pos = sbConfig["@position"] || [0,0,0];
-    const mass = sbConfig["@mass"] || 1;
-
-    const sphere = shapeNode?.["-geometry"]?.Sphere;
-    const radius = sphere?.["@radius"] || 1.0;
-
-    const geometry = new THREE.SphereGeometry(radius, 32, 16);
-    geometry.translate(pos[0], pos[1], pos[2]);
-
-    const material = new THREE.MeshLambertMaterial({ color: new THREE.Color(...colorArray) });
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.castShadow = true; mesh.receiveShadow = true;
-    mesh.frustumCulled = false;
-
-    scene.add(mesh);
-
-    const softBodyHelpers = new Ammo.btSoftBodyHelpers();
-    const center = new Ammo.btVector3(pos[0], pos[1], pos[2]);
-    const radiusVec = new Ammo.btVector3(radius, radius, radius);
-
-    const softBody = softBodyHelpers.CreateEllipsoid(physicsWorld.getWorldInfo(), center, radiusVec, 256);
-
-    const sbCfg = softBody.get_m_cfg();
-    sbCfg.set_viterations(10);
-    sbCfg.set_piterations(10);
-    sbCfg.set_kDF(0.1);
-    sbCfg.set_kDP(0.01);
-    sbCfg.set_kPR(10);
-
-    const sbMat = softBody.get_m_materials().at(0);
-    sbMat.set_m_kLST(0.15);
-    sbMat.set_m_kAST(0.1);
-    sbMat.set_m_kVST(0.1);
-
-    softBody.setTotalMass(mass, false);
-    Ammo.castObject(softBody, Ammo.btCollisionObject).getCollisionShape().setMargin(margin);
-
-    softBody.generateBendingConstraints(2, sbMat);
-    physicsWorld.addSoftBody(softBody, 1, -1);
-
-    mesh.userData.physicsBody = softBody;
-    mesh.userData.isSphere = true;
-    softBody.setActivationState(4);
-
-    const nodes = softBody.get_m_nodes();
-    const numNodes = nodes.size();
-    const mapping = [];
-    const positions = geometry.attributes.position.array;
-
-    for (let i = 0; i < positions.length / 3; i++) {
-        let vx = positions[i * 3], vy = positions[i * 3 + 1], vz = positions[i * 3 + 2];
-        let minDist = Infinity;
-        let minIdx = -1;
-        for (let j = 0; j < numNodes; j++) {
-            let nodePos = nodes.at(j).get_m_x();
-            let dx = vx - nodePos.x();
-            let dy = vy - nodePos.y();
-            let dz = vz - nodePos.z();
-            let dist = dx * dx + dy * dy + dz * dz;
-            if (dist < minDist) {
-                minDist = dist;
-                minIdx = j;
-            }
-        }
-        mapping.push(minIdx);
-    }
-    mesh.userData.mapping = mapping;
-
-    const def = sbConfig["@DEF"];
-    if (def) parsedBodiesMap[def] = { mesh, body: softBody, isSoft: true };
-
-    Ammo.destroy(center);
-    Ammo.destroy(radiusVec);
-
-    softBodies.push(mesh);
-}
-
-// { "CADAssembly": { "@name": "Engine", "-children": [...] } }
-function x3dCADAssemblyToThree(node) {
-  const group = new THREE.Group();
-  group.name = node["@name"] || 'CADAssembly';
-
-  (node["-children"] || []).forEach(child => {
-    if (child.CADPart) {
-      group.add(x3dCADPartToThree(child.CADPart));
-    }
-  });
-
-  return group;
-}
-
-// X3D:
-// { "CADPart": {
-//     "@name": "Bolt",
-//     "@translation": [1, 0, 0],
-//     "@rotation": [0, 1, 0, 1.5708],
-//     "@scale": [1, 1, 1],
-//     "-children": [...]
-// }}
-function x3dCADPartToThree(node) {
-  const group = new THREE.Group();
-  group.name = node["@name"] || 'CADPart';
-
-  // Apply transform
-  const t = node["@translation"] || [0, 0, 0];
-  const r = node["@rotation"]    || [0, 0, 1, 0]; // axis-angle
-  const s = node["@scale"]       || [1, 1, 1];
-
-  group.position.set(t[0], t[1], t[2]);
-  group.quaternion.setFromAxisAngle(
-    new THREE.Vector3(r[0], r[1], r[2]).normalize(), r[3]
-  );
-  group.scale.set(s[0], s[1], s[2]);
-
-  (node["-children"] || []).forEach(child => {
-    if (child.CADFace) {
-      group.add(x3dCADFaceToThree(child.CADFace));
-    }
-  });
-
-  return group;
-}
-
-// X3D:
-// { "CADFace": {
-//     "@name": "TopFace",
-//     "-shape": { "Shape": {
-//       "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.2, 0.2] } } } },
-//       "-geometry": { "IndexedFaceSet": { ... } }
-//     } }
-// }}
-function x3dCADFaceToThree(node) {
-  const shape = node["-shape"]?.Shape || node.Shape;
-  if (!shape) return new THREE.Group();
-
-  let geometry;
-  const geomNode = shape["-geometry"] || {};
-  geometry = parseX3DGeometry(geomNode);
-
-  if (!geometry) geometry = new THREE.BufferGeometry();
-
-  // Build material from Appearance
-  const appNode = shape["-appearance"]?.Appearance || {};
-  const mat   = appNode["-material"]?.Material || {};
-  const dc    = mat["@diffuseColor"]  || [0.8, 0.8, 0.8];
-  const sc    = mat["@specularColor"] || [0.2, 0.2, 0.2];
-  const shine = mat["@shininess"]     ?? 0.2;
-  const trans = mat["@transparency"]  ?? 0;
-
-  const material = new THREE.MeshPhongMaterial({
-    color:     new THREE.Color(dc[0], dc[1], dc[2]),
-    specular:  new THREE.Color(sc[0], sc[1], sc[2]),
-    shininess: shine * 128,
-    opacity:   1 - trans,
-    transparent: trans > 0,
-    side: THREE.DoubleSide,
-  });
-
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.name = node["@name"] || 'CADFace';
-  return mesh;
-}
-
-function parseX3DCAD(x3dJSON) {
-  const root = new THREE.Group();
-
-  function processNode(node, parent) {
-    // Handle each possible CAD node type
-    if (node.CADAssembly) {
-      const group = x3dCADAssemblyToThree(node.CADAssembly);
-      parent.add(group);
-      (node.CADAssembly["-children"] || []).forEach(c => processNode(c, group));
-    }
-    else if (node.CADPart) {
-      const part = x3dCADPartToThree(node.CADPart);
-      parent.add(part);
-      (node.CADPart["-children"] || []).forEach(c => processNode(c, part));
-    }
-    else if (node.CADFace) {
-      parent.add(x3dCADFaceToThree(node.CADFace));
-    }
-    else if (node.Shape) {
-      const mesh = x3dCADFaceToThree({ "-shape": { Shape: node.Shape } });
-      parent.add(mesh);
-    }
-    else if (node.Transform) {
-      const g = new THREE.Group();
-      const t = node.Transform["@translation"] || [0, 0, 0];
-      const r = node.Transform["@rotation"]    || [0, 0, 1, 0];
-      const s = node.Transform["@scale"]       || [1, 1, 1];
-      g.position.set(t[0], t[1], t[2]);
-      g.quaternion.setFromAxisAngle(new THREE.Vector3(r[0], r[1], r[2]).normalize(), r[3]);
-      g.scale.set(s[0], s[1], s[2]);
-      parent.add(g);
-      (node.Transform["-children"] || []).forEach(c => processNode(c, g));
-    }
-  }
-
-  processNode(x3dJSON, root);
-  return root;
-}
-
-// Usage
-/*
-const threeScene = parseX3DCAD(myX3DJsonData);
-scene.add(threeScene);
-*/
-
-function x3dNurbsCurveToThree(node) {
-  const coordNode = node["-controlPoint"]?.Coordinate;
-  const pts = coordNode?.["@point"] || [];
-  const points = [];
-  for (let i = 0; i < pts.length; i += 3) {
-      points.push(new THREE.Vector3(pts[i], pts[i+1], pts[i+2]));
-  }
-  const curve = points.length > 1 ? new THREE.CatmullRomCurve3(points) : new THREE.LineCurve3(new THREE.Vector3(), new THREE.Vector3());
-  const geometry = new THREE.BufferGeometry().setFromPoints(points);
-  return { curve, geometry };
-}
-
-function x3dNurbsCurveAsEdge(node, material = null) {
-  const { curve, geometry } = x3dNurbsCurveToThree(node);
-
-  const edgeMat = material || new THREE.LineBasicMaterial({
-    color: 0x222222,
-    linewidth: 1,
-  });
-
-  return new THREE.Line(geometry, edgeMat);
-}
-
-// Attach NURBS edges to a CAD face for a wireframe-style look
-function buildCADFaceWithEdges(faceNode, curveNodes = []) {
-  const group = new THREE.Group();
-  group.add(x3dCADFaceToThree(faceNode));
-
-  curveNodes.forEach(cn => {
-    if (cn.NurbsCurve) {
-      group.add(x3dNurbsCurveAsEdge(cn.NurbsCurve));
-    }
-  });
-
-  return group;
-}
-
-function sweepShapeAlongNurbsCurve(shape2D, nurbsNode, steps = 50) {
-  const { curve } = x3dNurbsCurveToThree(nurbsNode);
-
-  const geo = new THREE.ExtrudeGeometry(shape2D, {
-    extrudePath: curve,
-    steps: steps,
-    bevelEnabled: false,
-  });
-
-  return geo;
-}
-
-// Example: sweep a circular cross-section along a NURBS spine
-/*
-const circle = new THREE.Shape();
-circle.absarc(0, 0, 0.1, 0, Math.PI * 2, false);
-
-const tubeMesh = new THREE.Mesh(
-  sweepShapeAlongNurbsCurve(circle, nurbsCurveNode),
-  new THREE.MeshStandardMaterial({ color: 0x888888 })
-);
-scene.add(tubeMesh);
-*/
-
-function createHinge(jointConfig) {
-    const b1Name = jointConfig["-body1"]?.RigidBody?.["@USE"] || jointConfig["@body1"];
-    const b2Name = jointConfig["-body2"]?.RigidBody?.["@USE"] || jointConfig["@body2"];
-
-    const b1 = parsedBodiesMap[b1Name];
-    const b2 = parsedBodiesMap[b2Name];
-    const ap = jointConfig["@anchorPoint"];
-    const ax = jointConfig["@axis"];
-
-    if (!b1 || !b2) {
-        console.warn(`Hinge creation failed: Missing one or both connected bodies (${b1Name}, ${b2Name})`);
-        return;
-    }
-
-    const pA = new Ammo.btVector3(ap[0] - b1.mesh.position.x, ap[1] - b1.mesh.position.y, ap[2] - b1.mesh.position.z);
-    const pB = new Ammo.btVector3(ap[0] - b2.mesh.position.x, ap[1] - b2.mesh.position.y, ap[2] - b2.mesh.position.z);
-    const axis = new Ammo.btVector3(ax[0], ax[1], ax[2]);
-
-    globalHinge = new Ammo.btHingeConstraint(b1.body, b2.body, pA, pB, axis, axis, true);
-    physicsWorld.addConstraint(globalHinge, true);
-}
-
-function createStitch(stitchConfig) {
-    const rbName = stitchConfig["-body1"]?.RigidBody?.["@USE"] || stitchConfig["@body1"];
-    const sbName = stitchConfig["-body2"]?.SoftBody?.["@USE"] || stitchConfig["@body2"];
-
-    const rbEntry = parsedBodiesMap[rbName];
-    const sbEntry = parsedBodiesMap[sbName];
-
-    if (!rbEntry || !sbEntry) {
-        console.warn(`Stitch creation failed: Missing rigid body (${rbName}) or soft body (${sbName})`);
-        return;
-    }
-
-    const indices = (stitchConfig["@body1Index"] || []).map(Number);
-    const weights = (stitchConfig["@weight"] || []).map(Number);
-
-    const softBody = sbEntry.body;
-    indices.forEach((nodeIndex, i) => {
-        const weight = weights[i] !== undefined ? weights[i] : 1.0;
-        softBody.appendAnchor(nodeIndex, rbEntry.body, false, weight);
-    });
-}
-
 function initInput() {
     window.addEventListener('keydown', (e) => {
-        if (e.keyCode === 81) armMovement = 1; // Q
-        if (e.keyCode === 65) armMovement = -1; // A
+        if (e.keyCode === 81) armMovement = 1;
+        if (e.keyCode === 65) armMovement = -1;
     }, false);
     window.addEventListener('keyup', () => armMovement = 0, false);
 }
@@ -1598,74 +1121,73 @@ function onWindowResize() {
 function animate() {
     requestAnimationFrame(animate);
     timer.update();
-    const deltaTime = Math.min(timer.getDelta(), 0.05); // cap at 50ms / 20fps minimum
-    timer.update(deltaTime);
-    // Update ALL mixers retrieved from Inline loading / humanoid parsing
+    const deltaTime = Math.min(timer.getDelta(), 0.05);
+
     mixers.forEach(mixer => mixer.update(deltaTime));
 
+    // Force hidden meshes (the original SkinnedMesh) to update their world matrices!
+    // This allows our physics Kinematic bones below to read the actual moving bone locations.
+    hiddenSkinnedMeshes.forEach(mesh => mesh.updateMatrixWorld(true));
+
+    kinematicBones.forEach(({ bone, body }) => {
+        const pos = new THREE.Vector3();
+        const quat = new THREE.Quaternion();
+        bone.getWorldPosition(pos);
+        bone.getWorldQuaternion(quat);
+
+        transformAux1.setIdentity();
+        transformAux1.setOrigin(new Ammo.btVector3(pos.x, pos.y, pos.z));
+        transformAux1.setRotation(new Ammo.btQuaternion(quat.x, quat.y, quat.z, quat.w));
+
+        // Setting both ensures the Kinematic Body actively drives physics interactions and anchors
+        const ms = body.getMotionState();
+        if (ms) ms.setWorldTransform(transformAux1);
+        body.setWorldTransform(transformAux1);
+    });
 
     if (globalHinge) globalHinge.enableAngularMotor(true, 0.8 * armMovement, 50);
 
     physicsWorld.stepSimulation(deltaTime, 10);
 
-    // Update Soft Bodies
     softBodies.forEach(mesh => {
-	const softBody = mesh.userData.physicsBody;
-	const nodes = softBody.get_m_nodes();
+        const softBody = mesh.userData.physicsBody;
+        const nodes = softBody.get_m_nodes();
 
-	if (mesh.userData.isSphere || mesh.userData.isGenericSoft) {
-	    const mapping = mesh.userData.mapping;
-	    const positions = mesh.geometry.attributes.position.array;
-	    for (let i = 0; i < mapping.length; i++) {
-		const nodePos = nodes.at(mapping[i]).get_m_x();
-		positions[i * 3]     = nodePos.x();
-		positions[i * 3 + 1] = nodePos.y();
-		positions[i * 3 + 2] = nodePos.z();
-	    }
-	    mesh.geometry.computeVertexNormals();
-	    mesh.geometry.attributes.position.needsUpdate = true;
-	    mesh.geometry.attributes.normal.needsUpdate = true;
-	} else if (mesh.userData.isCloth) {
-	    const positions = mesh.geometry.attributes.position.array;
-	    const numVerts = positions.length / 3;
-	    let idx = 0;
-	    for (let i = 0; i < numVerts; i++) {
-		const nodePos = nodes.at(i).get_m_x();
-		positions[idx++] = nodePos.x();
-		positions[idx++] = nodePos.y();
-		positions[idx++] = nodePos.z();
-	    }
-	    mesh.geometry.computeVertexNormals();
-	    mesh.geometry.attributes.position.needsUpdate = true;
-	    mesh.geometry.attributes.normal.needsUpdate = true;
-	} else if (mesh.userData.isRope) {
-	    const positions = mesh.geometry.attributes.position.array;
-	    const numVerts = positions.length / 3;
-	    let idx = 0;
-	    for (let i = 0; i < numVerts; i++) {
-		const nodePos = nodes.at(i).get_m_x();
-		positions[idx++] = nodePos.x();
-		positions[idx++] = nodePos.y();
-		positions[idx++] = nodePos.z();
-	    }
-	    mesh.geometry.attributes.position.needsUpdate = true;
-	}
+        if (mesh.userData.isSphere || mesh.userData.isGenericSoft) {
+            const mapping = mesh.userData.mapping;
+            const positions = mesh.geometry.attributes.position.array;
+            for (let i = 0; i < mapping.length; i++) {
+                const nodePos = nodes.at(mapping[i]).get_m_x();
+                positions[i * 3]     = nodePos.x();
+                positions[i * 3 + 1] = nodePos.y();
+                positions[i * 3 + 2] = nodePos.z();
+            }
+            mesh.geometry.computeVertexNormals();
+            mesh.geometry.attributes.position.needsUpdate = true;
+            mesh.geometry.attributes.normal.needsUpdate = true;
+        } else if (mesh.userData.isCloth || mesh.userData.isRope) {
+            const positions = mesh.geometry.attributes.position.array;
+            let idx = 0;
+            for (let i = 0; i < positions.length / 3; i++) {
+                const nodePos = nodes.at(i).get_m_x();
+                positions[idx++] = nodePos.x(); positions[idx++] = nodePos.y(); positions[idx++] = nodePos.z();
+            }
+            if (mesh.userData.isCloth) mesh.geometry.computeVertexNormals();
+            mesh.geometry.attributes.position.needsUpdate = true;
+            if (mesh.userData.isCloth) mesh.geometry.attributes.normal.needsUpdate = true;
+        }
     });
 
-    // Update Rigid Bodies
     rigidBodies.forEach(obj => {
         const ms = obj.userData.physicsBody.getMotionState();
         if (ms) {
             ms.getWorldTransform(transformAux1);
-            const p = transformAux1.getOrigin();
-            const q = transformAux1.getRotation();
+            const p = transformAux1.getOrigin(), q = transformAux1.getRotation();
             obj.position.set(p.x(), p.y(), p.z());
             obj.quaternion.set(q.x(), q.y(), q.z(), q.w());
         }
     });
 
-    if (controls) {
-        controls.update();
-    }
+    if (controls) controls.update();
     renderer.render(scene, camera);
 }
