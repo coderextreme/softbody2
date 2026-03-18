@@ -738,7 +738,7 @@ function createCompoundRigidBody(def, shapeNodes, mass, pos, colorArray, ori, sc
         body.setActivationState(4);
     }
 
-    physicsWorld.addRigidBody(body);
+    physicsWorld.addRigidBody(body, 2, -1);
     if (def) parsedBodiesMap[def] = { mesh: parent, body };
 }
 
