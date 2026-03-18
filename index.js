@@ -846,7 +846,7 @@ function createSoftBodyFromGeometry(sbConfig, shapeNode, colorArray) {
     // body jiggles back like a jelly mould after being deformed.
     sbCfg.set_kMT(0.3);
     // SDF_RS (0x01) = soft vs rigid collision via SDF.
-    // CL_SS  (0x10) = cluster vs cluster soft-soft collision.
+    // VF_SS  (0x10) = Vertex/Face soft-soft collision.
     sbCfg.set_collisions(0x11);
 
     const sbMat = triMeshSoftBody.get_m_materials().at(0);
@@ -941,6 +941,8 @@ function createSoftBodyCloth(sbConfig, shapeNode, colorArray) {
 
     const sbCfg = clothSoftBody.get_m_cfg();
     sbCfg.set_viterations(10); sbCfg.set_piterations(10);
+    sbCfg.set_collisions(0x11); // Enable Soft vs Rigid (SDF_RS) and Soft vs Soft (VF_SS) collisions
+
     clothSoftBody.setTotalMass(mass, false);
     Ammo.castObject(clothSoftBody, Ammo.btCollisionObject).getCollisionShape().setMargin(margin * 3);
 
@@ -996,6 +998,7 @@ function createSoftBodySphere(sbConfig, shapeNode, colorArray) {
 
     const sbCfg = softBody.get_m_cfg();
     sbCfg.set_viterations(10); sbCfg.set_piterations(10); sbCfg.set_kDF(0.1); sbCfg.set_kDP(0.01); sbCfg.set_kPR(10);
+    sbCfg.set_collisions(0x11); // Enable Soft vs Rigid (SDF_RS) and Soft vs Soft (VF_SS) collisions
 
     const sbMat = softBody.get_m_materials().at(0);
     sbMat.set_m_kLST(0.15); sbMat.set_m_kAST(0.1); sbMat.set_m_kVST(0.1);
