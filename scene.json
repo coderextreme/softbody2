@@ -86,6 +86,7 @@
 		"Shape": {
 		  "-geometry": {
 		    "Text": {
+		      "@DEF": "Features",
 		      "@string": ["X3D JSON", "Ammo.js", "Three.JS", "WebGPU"],
 		      "-fontStyle": { "FontStyle": { "@size": 0.8 } }
 		    }
@@ -111,7 +112,7 @@
                     
                     "@rotation": [1, 0, 0, 1.5708],
                     "-children": [
-	        	{ "Inline": { "DEF": "MyInline", "@url" : [ "HumanoidComplete.json" ] } }
+	        	{ "Inline": { "DEF": "MyInline", "@url" : [ "HumanoidComplete.x3dj" ] } }
 		    ]
 	      }
         },
@@ -126,6 +127,7 @@
           "RigidBodyCollection": {
             "@gravity": [0, -9.8, 0],
             "-bodies": [
+              { "SoftBody": { "@DEF": "Features", "@mass": 1, "@position": [0, 6, 0], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "@USE": "" } } } } ] } },
               { "RigidBody": { "@DEF": "Ground", "@mass": 0, "@position": [0, -0.5, 0], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.8, 0.8] } } } }, "-geometry": { "Box": { "@size": [40, 1, 40] } } } } } } ] } },
               { "RigidBody": { "@DEF": "Base", "@mass": 0, "@position": [-3, 0.1, -5], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.37, 0.37, 0.37] } } } }, "-geometry": { "Box": { "@size": [1, 0.2, 1] } } } } } } ] } },
               { "RigidBody": { "@DEF": "Pylon", "@mass": 0, "@position": [-3, 3, -5], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.37, 0.37, 0.37] } } } }, "-geometry": { "Box": { "@size": [0.4, 6, 0.4] } } } } } } ] } },
@@ -176,7 +178,7 @@
               { "RigidBody": { "@DEF": "Brick_L8_1", "@mass": 0.5, "@position": [0, 4.5, 0.0], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.3, 0.2] } } } }, "-geometry": { "Box": { "@size": [0.6, 0.6, 1.2] } } } } } } ] } },
               { "RigidBody": { "@DEF": "Cylinder", "@mass": 0.5, "@position": [0, 4.5, 0.0], "-geometry": [ { "CollidableShape": { "-shape": { "Shape": { "-appearance": { "Appearance": { "-material": { "Material": { "@diffuseColor": [0.8, 0.3, 0.2] } } } }, "-geometry": { "Cylinder": { "@height": 1.0, "@radius": 1.0 } } } } } } ] } } ,
               {
-                "RigidBody": {
+                "SoftBody": {
                   "@DEF": "Gramps",
                   "@mass": 1.5,
                   "@position": [0, 3.0, 0.0],

@@ -6,6 +6,21 @@ import { FontLoader } from 'three/addons/loaders/FontLoader.js';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 import { SimplifyModifier } from 'three/addons/modifiers/SimplifyModifier.js';
 
+// X3D FontStyle.family → typeface JSON file mapping
+const fontMap = {
+  'SERIF':      'https://threejs.org/examples/fonts/gentilis_regular.typeface.json',
+  'SANS':       'https://threejs.org/examples/fonts/helvetiker_regular.typeface.json',
+  'TYPEWRITER': 'https://threejs.org/examples/fonts/droid/droid_sans_mono_regular.typeface.json',
+};
+
+// X3D FontStyle.style → font variant file suffix
+const styleMap = {
+  'PLAIN':      'regular',
+  'BOLD':       'bold',
+  'ITALIC':     'italic',
+  'BOLDITALIC': 'bold', // Three.js fonts don't always have bold+italic
+};
+
 let physicsWorld, scene, camera, renderer, controls;
 let timer = new THREE.Timer();
 let rigidBodies = [];
@@ -219,48 +234,130 @@ export async function loadX3DHumanoid(json, scene, parentGroup) {
     }
     if (!humanoidNode) return null;
 
-    const skinNode = resolveUSE(humanoidNode['-skin'][0].Shape);
-    const geoNode = resolveUSE(skinNode['-geometry']);
-    const rawGeo = geoNode.TriangleSet || geoNode.IndexedTriangleSet || geoNode.IndexedFaceSet;
+    // --- Multi-material skin ---
+    // The new X3D export has one Shape per Blender material inside -skin.
+    // All shapes share the same vertex coordinate pool via DEF/USE ("SkinCoords"),
+    // so @skinCoordIndex on every HAnimJoint refers to that single pool.
+    const skinShapeRefs = humanoidNode['-skin'] || [];
+    const skinShapes = skinShapeRefs.map(s => resolveUSE(s.Shape)).filter(Boolean);
+    if (!skinShapes.length) return null;
 
-    const coordNode = resolveUSE(rawGeo['-coord']?.Coordinate || rawGeo.Coordinate);
-    const positions = coordNode['@point'];
-    const uvs = rawGeo['-texCoord'] ? resolveUSE(rawGeo['-texCoord'].TextureCoordinate)['@point'] : null;
-    const colors = rawGeo['-color'] ? resolveUSE(rawGeo['-color'].Color)['@color'] : null;
+    // Resolve the shared coordinate pool from the first shape's geometry.
+    // Subsequent shapes reference it via USE="SkinCoords" (resolveUSE handles transparently).
+    const firstGeoNode  = resolveUSE(skinShapes[0]['-geometry']);
+    const firstRawGeo   = firstGeoNode.IndexedTriangleSet || firstGeoNode.TriangleSet || firstGeoNode.IndexedFaceSet;
+    const sharedCoordNode = resolveUSE(firstRawGeo['-coord']?.Coordinate || firstRawGeo.Coordinate);
+    const sharedPositions = sharedCoordNode['@point'];
+    const origVertexCount = sharedPositions.length / 3;
 
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    if (uvs) geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    // --- Build multi-material geometry ---
+    // We expand every shape into face-corner data (no shared index buffer), then
+    // concatenate it all into one BufferGeometry with addGroup() ranges.
+    // This lets each shape have its own UV set and texture while sharing one SkinnedMesh
+    // (and therefore one skeleton bind), which is required for correct skinning.
+    //
+    // allOrigVI[i] = the original shared-pool vertex index for expanded corner i.
+    // This is used below to expand skin weights to match the expanded geometry.
+    const allPos    = [];   // flat float array of expanded positions
+    const allUV     = [];   // flat float array of expanded UVs
+    const allOrigVI = [];   // original coord-pool index per expanded corner
+    const groups    = [];   // { start, count, materialIndex }
+    const materials = [];   // THREE.Material per shape
 
-    if (rawGeo['@coordIndex']) {
-        geometry.setIndex(triangulateFaceSet(rawGeo['@coordIndex']));
-    } else if (rawGeo['@index']) {
-        geometry.setIndex(rawGeo['@index']);
+    for (const shapeNode of skinShapes) {
+        const geoNode = resolveUSE(shapeNode['-geometry']);
+        const rawGeo  = geoNode.IndexedTriangleSet || geoNode.TriangleSet || geoNode.IndexedFaceSet;
+
+        // Positions — may be a USE reference to the same shared pool, that's fine.
+        const coordNode = resolveUSE(rawGeo['-coord']?.Coordinate || rawGeo.Coordinate);
+        const positions = coordNode['@point'];
+
+        // UVs
+        const uvNode = rawGeo['-texCoord'] ? resolveUSE(rawGeo['-texCoord'].TextureCoordinate) : null;
+        const uvPool = uvNode ? uvNode['@point'] : null;
+
+        // Determine per-corner position index and UV index arrays.
+        //
+        //  IndexedFaceSet  (@coordIndex) : independent coord/texcoord indices — expand both.
+        //  IndexedTriangleSet (@index)   : shared index for ALL attributes per X3D spec.
+        //  TriangleSet (no index)        : sequential.
+        let posCornerIdx = null;   // index into positions per face-corner  (null = sequential)
+        let uvCornerIdx  = null;   // index into uvPool  per face-corner     (null = sequential)
+
+        if (rawGeo['@coordIndex']) {
+            posCornerIdx = triangulateFaceSet(rawGeo['@coordIndex']);
+            const rawTex = rawGeo['@texCoordIndex'];
+            uvCornerIdx  = rawTex ? triangulateFaceSet(rawTex) : posCornerIdx;
+        } else if (rawGeo['@index']) {
+            // IndexedTriangleSet: same @index used for positions AND texcoords.
+            posCornerIdx = Array.from(rawGeo['@index']);
+            uvCornerIdx  = posCornerIdx;
+        }
+
+        const groupStart = allPos.length / 3;
+
+        if (posCornerIdx) {
+            for (let i = 0; i < posCornerIdx.length; i++) {
+                const ci = posCornerIdx[i];
+                allPos.push(positions[ci * 3], positions[ci * 3 + 1], positions[ci * 3 + 2]);
+                if (uvPool) {
+                    const ti = uvCornerIdx[i];
+                    allUV.push(uvPool[ti * 2], uvPool[ti * 2 + 1]);
+                }
+                allOrigVI.push(ci);
+            }
+            groups.push({ start: groupStart, count: posCornerIdx.length, materialIndex: materials.length });
+        } else {
+            // TriangleSet — sequential
+            const count = positions.length / 3;
+            for (let i = 0; i < count; i++) {
+                allPos.push(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+                if (uvPool) allUV.push(uvPool[i * 2], uvPool[i * 2 + 1]);
+                allOrigVI.push(i);
+            }
+            groups.push({ start: groupStart, count, materialIndex: materials.length });
+        }
+
+        // Build material for this shape.
+        // UV Y-axis: X3D stores UVs with origin at bottom-left (OpenGL convention),
+        // which matches Three.js's UV convention exactly.  Three.js TextureLoader
+        // defaults to flipY=true which flips the image on upload so the GPU texture
+        // is also bottom-left — this is correct and must NOT be overridden.
+        const appearance  = resolveUSE(shapeNode['-appearance']?.Appearance);
+        const textureNode = resolveUSE(appearance?.['-texture']);
+        let mat;
+        if (textureNode && textureNode.ImageTexture) {
+            const textureUrl = textureNode.ImageTexture['@url'][0];
+            const basePath   = textureUrl.startsWith("data:") ? "" : window.location.href.split('/').slice(0, -1).join('/') + '/';
+            const diffuseMap = new THREE.TextureLoader().load(basePath + textureUrl);
+            diffuseMap.colorSpace = THREE.SRGBColorSpace;
+            // flipY is left at its default (true) — correct for X3D / OpenGL-origin UVs.
+            mat = new THREE.MeshStandardMaterial({ map: diffuseMap });
+        } else {
+            const matData  = resolveUSE(appearance?.['-material']?.Material);
+            const diffuse  = matData?.['@diffuseColor'] || [0.8, 0.8, 0.8];
+            mat = new THREE.MeshStandardMaterial({ color: new THREE.Color(...diffuse) });
+        }
+        materials.push(mat);
     }
 
+    // Assemble the BufferGeometry from all expanded shapes.
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(allPos, 3));
+    if (allUV.length) geometry.setAttribute('uv', new THREE.Float32BufferAttribute(allUV, 2));
+    groups.forEach(g => geometry.addGroup(g.start, g.count, g.materialIndex));
     geometry.computeVertexNormals();
 
-    const appearance = resolveUSE(skinNode['-appearance']?.Appearance);
-    const textureNode = resolveUSE(appearance?.['-texture']);
-    let material;
-
-    if (textureNode && textureNode.ImageTexture) {
-        const textureUrl = textureNode.ImageTexture['@url'][0];
-        let basePath = textureUrl.startsWith("data:") ? "" : window.location.href.split('/').slice(0,-1).join('/') + '/';
-        const diffuseMap = new THREE.TextureLoader().load(basePath + textureUrl);
-        diffuseMap.colorSpace = THREE.SRGBColorSpace;
-        diffuseMap.flipY = false;
-        material = new THREE.MeshStandardMaterial({ map: diffuseMap, vertexColors: !!colors });
-    } else {
-    	if (colors) geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-        material = new THREE.MeshStandardMaterial({ vertexColors: !!colors });
-    }
-
+    // --- Skeleton & skin weights ---
     const skeletonNodes = humanoidNode['-skeleton'] || [];
     const bones = [], boneMap = {};
-    const vertexCount = positions.length / 3;
-    const skinIndices = new Array(vertexCount * 4).fill(0), skinWeights = new Array(vertexCount * 4).fill(0);
-    const weightCounts = new Array(vertexCount).fill(0);
+
+    // Build skin weights against the ORIGINAL shared vertex pool first.
+    // @skinCoordIndex values on HAnimJoint refer to that pool regardless of how
+    // many shapes (materials) there are.
+    const skinIndicesOrig = new Array(origVertexCount * 4).fill(0);
+    const skinWeightsOrig = new Array(origVertexCount * 4).fill(0);
+    const weightCounts    = new Array(origVertexCount).fill(0);
 
     let boneIndex = 0;
     function parseJoint(jointObj, parentBone, pivotParent) {
@@ -271,7 +368,7 @@ export async function loadX3DHumanoid(json, scene, parentGroup) {
         if (pivotParent) { pivotParent.add(pivot); scene.add(pivotParent); }
 
         if (joint['@translation']) bone.position.fromArray(joint['@translation']);
-        if (joint['@center']) bone.position.fromArray(joint['@center']);
+        if (joint['@center'])      bone.position.fromArray(joint['@center']);
         if (joint['@rotation']) {
             const [x, y, z, angle] = joint['@rotation'];
             bone.quaternion.setFromAxisAngle(new THREE.Vector3(x, y, z), angle);
@@ -286,8 +383,8 @@ export async function loadX3DHumanoid(json, scene, parentGroup) {
         for (let i = 0; i < indices.length; i++) {
             const vIdx = indices[i], w = weights[i], wc = weightCounts[vIdx];
             if (wc < 4) {
-                skinIndices[vIdx * 4 + wc] = boneIndex;
-                skinWeights[vIdx * 4 + wc] = w;
+                skinIndicesOrig[vIdx * 4 + wc] = boneIndex;
+                skinWeightsOrig[vIdx * 4 + wc] = w;
                 weightCounts[vIdx] += 1;
             }
         }
@@ -297,54 +394,62 @@ export async function loadX3DHumanoid(json, scene, parentGroup) {
     }
 
     const rootBones = skeletonNodes.map(rootNode => parseJoint(rootNode, null, null));
-    geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(skinIndices, 4));
+
+    // Expand skin data to match the expanded (non-indexed) geometry.
+    // allOrigVI[i] gives the original pool index for expanded corner i.
+    const finalVertCount = allOrigVI.length;
+    const skinIndices = new Uint16Array(finalVertCount * 4);
+    const skinWeights = new Float32Array(finalVertCount * 4);
+    for (let i = 0; i < finalVertCount; i++) {
+        const ov = allOrigVI[i];
+        skinIndices[i * 4]     = skinIndicesOrig[ov * 4];
+        skinIndices[i * 4 + 1] = skinIndicesOrig[ov * 4 + 1];
+        skinIndices[i * 4 + 2] = skinIndicesOrig[ov * 4 + 2];
+        skinIndices[i * 4 + 3] = skinIndicesOrig[ov * 4 + 3];
+        skinWeights[i * 4]     = skinWeightsOrig[ov * 4];
+        skinWeights[i * 4 + 1] = skinWeightsOrig[ov * 4 + 1];
+        skinWeights[i * 4 + 2] = skinWeightsOrig[ov * 4 + 2];
+        skinWeights[i * 4 + 3] = skinWeightsOrig[ov * 4 + 3];
+    }
+
+    geometry.setAttribute('skinIndex',  new THREE.Uint16BufferAttribute(skinIndices, 4));
     geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute(skinWeights, 4));
 
     const skeleton = new THREE.Skeleton(bones);
-    const mesh = new THREE.SkinnedMesh(geometry, material);
+    // Pass the materials array — Three.js SkinnedMesh supports multi-material via groups.
+    const mesh = new THREE.SkinnedMesh(geometry, materials);
     rootBones.forEach(b => mesh.add(b));
 
-    // Apply the HAnimHumanoid's own transform (scale, translation, rotation) to the mesh.
-    // This is the scale the user specifies on the HAnimHumanoid node (e.g. @scale [0.025,0.025,0.025]).
-    // We apply it here so that bone positions are consistent with the geometry in object space.
-    if (humanoidNode['@scale']) mesh.scale.fromArray(humanoidNode['@scale']);
+    if (humanoidNode['@scale'])       mesh.scale.fromArray(humanoidNode['@scale']);
     if (humanoidNode['@translation']) mesh.position.fromArray(humanoidNode['@translation']);
     if (humanoidNode['@rotation']) {
         const [rx, ry, rz, ra] = humanoidNode['@rotation'];
         mesh.quaternion.setFromAxisAngle(new THREE.Vector3(rx, ry, rz).normalize(), ra);
     }
 
-    // Do NOT bind here — the caller (processInline) must parent the mesh into the scene
-    // graph first so that updateWorldMatrix() captures the full parent-chain transform
-    // (including any ancestor scale from the wrapping Transform node).  Binding early
-    // would record identity as the bind matrix, causing parent scale to be applied
-    // twice during skinning and producing the wrong visual size.
+    // Do NOT bind here — processInline must parent the mesh first so the full
+    // parent-chain world matrix is captured in the bind pose.
     mesh.userData.pendingSkeleton = skeleton;
 
-    // Save these references so the SoftBody can steal the UV'd geometry and animate properly!
-    skinNode._skinnedMesh = mesh;
-    skinNode._geometry = geometry;
-
-    // mesh is NOT added to the scene here — processInline handles parenting.
+    // Expose the mesh and geometry on the first shape node so that
+    // createSoftBodyFromGeometry can clone the geometry for physics and
+    // hide the SkinnedMesh when switching to an animated soft body.
+    skinShapes[0]._skinnedMesh = mesh;
+    skinShapes[0]._geometry    = geometry;
 
     const duration = timeSensor ? (timeSensor['@cycleInterval'] || 1) : 1;
     const tracks = [];
 
-    // Normalize routes into a flat array of plain ROUTE objects.
-    // X3D JSON can store them two ways:
-    //   1. x3dScene['-ROUTE'] — array of bare objects { "@fromNode": ..., "@toNode": ... }
-    //   2. x3dScene['-children'] items — objects like { "ROUTE": { "@fromNode": ..., "@toNode": ... } }
     const rawRoutes = [
         ...(x3dScene['-ROUTE'] || []),
         ...(x3dScene['-children'] || []).filter(c => c.ROUTE).map(c => c.ROUTE),
     ];
-    // If an entry still has a .ROUTE wrapper (format 2 ended up in '-ROUTE'), unwrap it.
     const routes = rawRoutes.map(r => (r['@fromNode'] !== undefined ? r : (r.ROUTE || r)));
 
     for (const interpObj of interpolators) {
-        const type = interpObj.PositionInterpolator ? 'PositionInterpolator' : 'OrientationInterpolator';
+        const type  = interpObj.PositionInterpolator ? 'PositionInterpolator' : 'OrientationInterpolator';
         const interp = interpObj[type];
-        const route = routes.find(r => r['@fromNode'] === interp['@DEF'] && r['@fromField'] === 'value_changed');
+        const route  = routes.find(r => r['@fromNode'] === interp['@DEF'] && r['@fromField'] === 'value_changed');
         if (!route) continue;
 
         const targetBone = boneMap[route['@toNode']];
@@ -355,8 +460,9 @@ export async function loadX3DHumanoid(json, scene, parentGroup) {
             tracks.push(new THREE.VectorKeyframeTrack(`${targetBone.name}.position`, times, interp['@keyValue']));
         } else {
             const aaValues = interp['@keyValue'], quatValues = [];
-            for(let i = 0; i < aaValues.length; i += 4) {
-                const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(aaValues[i], aaValues[i+1], aaValues[i+2]), aaValues[i+3]);
+            for (let i = 0; i < aaValues.length; i += 4) {
+                const q = new THREE.Quaternion().setFromAxisAngle(
+                    new THREE.Vector3(aaValues[i], aaValues[i+1], aaValues[i+2]), aaValues[i+3]);
                 quatValues.push(q.x, q.y, q.z, q.w);
             }
             tracks.push(new THREE.QuaternionKeyframeTrack(`${targetBone.name}.quaternion`, times, quatValues));
@@ -532,6 +638,7 @@ function parseX3DGeometry(originalGeomNode) {
     if (geomNode.Box) return new THREE.BoxGeometry(...(geomNode.Box["@size"] || [1,1,1]));
     if (geomNode.Sphere) return new THREE.SphereGeometry(geomNode.Sphere["@radius"] || 1, 32, 16);
     if (geomNode.Cylinder) return new THREE.CylinderGeometry(geomNode.Cylinder["@radius"] || 1, geomNode.Cylinder["@radius"] || 1, geomNode.Cylinder["@height"] || 2, 32);
+    if (geomNode.Text) return createTextGeometry(geomNode.Text);
 
     if (geomNode.IndexedFaceSet) {
         const ifs = geomNode.IndexedFaceSet;
@@ -758,7 +865,9 @@ function createSoftBodyFromGeometry(sbConfig, shapeNode, colorArray) {
         shapeNode._skinnedMesh.updateMatrixWorld(true);
         geometry.applyMatrix4(shapeNode._skinnedMesh.matrixWorld);
 
-        material = shapeNode._skinnedMesh.material.clone();
+        // material may now be an array (multi-material SkinnedMesh) -- clone each entry.
+        const srcMat = shapeNode._skinnedMesh.material;
+        material = Array.isArray(srcMat) ? srcMat.map(m => m.clone()) : srcMat.clone();
 
         // Hide the SkinnedMesh — the soft body IS the visible Gramps.
         // Track it so the AnimationMixer keeps advancing bone world-matrices every
@@ -955,6 +1064,49 @@ function createSoftBodyCloth(sbConfig, shapeNode, colorArray) {
     if (def) parsedBodiesMap[def] = { mesh: clothMesh, body: clothSoftBody, isSoft: true };
     softBodies.push(clothMesh);
 }
+
+async function createTextGeometry(textData) {
+      const fontStyle = textData['-fontStyle']?.FontStyle;
+      const justify = fontStyle?.["@justify"] || ['BEGIN'];
+      const family = (fontStyle?.["@family"] || ['SANS'])[0].toUpperCase();
+      const fontFile = fontMap[family] || fontMap['SANS'];
+
+      const font = await new Promise((resolve, reject) => {
+        new FontLoader().load(
+          fontFile,
+          resolve, undefined, reject
+        );
+      });
+
+      const strings = textData['@string'] || ['Text'];
+      const size    = fontStyle?.['@size'] ?? 1;
+
+      if (strings.length === 1) {
+        const geometry = new TextGeometry(strings[0], { font, size, depth: 0, curveSegments: 12 });
+        geometry.computeVertexNormals();
+        return geometry;
+      }
+
+      const group = new THREE.Group();
+      strings.forEach((str, index) => {
+        const geometry = new TextGeometry(str, { font, size, depth: 0, curveSegments: 12 });
+        if (justify[0] === 'MIDDLE') {
+          geometry.computeBoundingBox();
+          const centerX = (geometry.boundingBox.max.x - geometry.boundingBox.min.x) / 2;
+          geometry.translate(-centerX, 0, 0);
+        }
+        if (justify[1] === 'MIDDLE') {
+          geometry.computeBoundingBox();
+          const centerY = (geometry.boundingBox.max.y - geometry.boundingBox.min.y) / 2;
+          geometry.translate(0, -centerY, 0);
+        }
+        geometry.computeVertexNormals();
+        const mesh = new THREE.Mesh(geometry);
+        mesh.position.y = -index * size * 1.2;
+        group.add(mesh);
+      });
+      return group;
+};
 
 function createSoftBodySphere(sbConfig, shapeNode, colorArray) {
     const pos = sbConfig["@position"] || [0,0,0];
