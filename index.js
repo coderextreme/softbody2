@@ -440,6 +440,30 @@ export async function loadX3DHumanoid(json, scene, parentGroup) {
 
     const rootBones = skeletonNodes.map(rootNode => parseJoint(rootNode, null, null));
 
+    // Note: Only consider 4 weights
+    // Normalize weights against the original shared vertex pool first.
+    // This prevents GLTF exporter validation errors (ACCESSOR_WEIGHTS_NON_NORMALIZED).
+    for (let i = 0; i < origVertexCount; i++) {
+        const w0 = skinWeightsOrig[i * 4];
+        const w1 = skinWeightsOrig[i * 4 + 1];
+        const w2 = skinWeightsOrig[i * 4 + 2];
+        const w3 = skinWeightsOrig[i * 4 + 3];
+        const sum = w0 + w1 + w2 + w3;
+
+        if (sum > 0) {
+            skinWeightsOrig[i * 4]     = w0 / sum;
+            skinWeightsOrig[i * 4 + 1] = w1 / sum;
+            skinWeightsOrig[i * 4 + 2] = w2 / sum;
+            skinWeightsOrig[i * 4 + 3] = w3 / sum;
+        } else {
+            // Fallback for unweighted vertices
+            skinWeightsOrig[i * 4]     = 1;
+            skinWeightsOrig[i * 4 + 1] = 0;
+            skinWeightsOrig[i * 4 + 2] = 0;
+            skinWeightsOrig[i * 4 + 3] = 0;
+        }
+    }
+
     // Expand skin data to match the expanded (non-indexed) geometry.
     // allOrigVI[i] gives the original pool index for expanded corner i.
     const finalVertCount = allOrigVI.length;
