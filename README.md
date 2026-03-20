@@ -15,3 +15,11 @@ Install node.js from https://nodejs.org
 ## Visit site listed in terminal (CTRL-left click) in your web browser
 
 http://localhost:5173/
+
+To build for static web site:
+
+```npm run build```
+
+Preview static site:
+
+```npm run preview```
