@@ -5,6 +5,8 @@ import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
 import { FontLoader } from 'three/addons/loaders/FontLoader.js';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 import { SimplifyModifier } from 'three/addons/modifiers/SimplifyModifier.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 
 // X3D FontStyle.family → typeface JSON file mapping
 const fontMap = {
@@ -30,6 +32,7 @@ const mixers = [];
 let globalHinge = null;
 let armMovement = 0;
 const margin = 0.05;
+let myAnimationClip = null;
 
 let transformAux1;
 let kinematicBones = [];
@@ -126,6 +129,48 @@ window.addEventListener('load', () => {
             .catch(err => console.error("Error loading scene.json:", err));
     });
 });
+
+function saveString(text, filename) {
+  const blob = new Blob([text], { type: 'text/plain' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  link.click();
+}
+
+function saveArrayBuffer(buffer, filename) {
+  const blob = new Blob([buffer], { type: 'application/octet-stream' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  link.click();
+}
+
+const downloadBtn = document.getElementById('download-btn');
+downloadBtn.addEventListener('click', function () {
+    const exporter = new GLTFExporter();
+    exporter.parse(
+	  scene,                          // Object3D to export
+	  function (result) {             // onCompleted callback
+	    if (result instanceof ArrayBuffer) {
+	      // Binary .glb
+	      saveArrayBuffer(result, 'model.glb');
+	    } else {
+	      // JSON .gltf
+	      const json = JSON.stringify(result, null, 2);
+	      saveString(json, 'model.gltf');
+	    }
+	  },
+	  function (error) {              // onError callback
+	    console.error('Export error:', error);
+	  },
+	  {
+		  // animations: [ myAnimationClip ],
+		  binary: true
+	  }
+	);
+
+    });
 
 async function initGraphics() {
     const container = document.getElementById('container');
@@ -472,7 +517,8 @@ export async function loadX3DHumanoid(json, scene, parentGroup) {
     let mixer = null;
     if (tracks.length > 0) {
         mixer = new THREE.AnimationMixer(mesh);
-        mixer.clipAction(new THREE.AnimationClip('X3D_Action', duration, tracks)).play();
+        myAnimationClip = new THREE.AnimationClip('X3D_Action', duration, tracks);
+	mixer.clipAction(myAnimationClip).play();
     }
     return { mesh, mixer };
 }
