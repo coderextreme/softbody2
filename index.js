@@ -1389,6 +1389,32 @@ function onWindowResize() {
     renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
+
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+
+function onPointerMove(event) {
+    // 1. Normalize pointer position
+    pointer.x = (event.clientX / window.innerWidth) * 2 - 1;
+    pointer.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+    // 2. Set raycaster
+    raycaster.setFromCamera(pointer, camera);
+
+    // 3. Intersect model
+    const intersects = raycaster.intersectObjects(scene.children, true);
+
+    // 4. Hover effect
+    if (intersects.length > 0) {
+	    // invert the color
+	    const object = intersects[0].object;
+	    const currentColorHex = object.material.color.getHex();
+	    const invertedColorHex = 0xffffff - currentColorHex;
+	    object.material.color.set(invertedColorHex);
+    }
+}
+window.addEventListener('pointermove', onPointerMove);
+
 function animate() {
     requestAnimationFrame(animate);
     timer.update();
